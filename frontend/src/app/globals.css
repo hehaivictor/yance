@@ -1,0 +1,108 @@
+@import "tailwindcss";
+
+:root {
+  --background: #efe5d6;
+  --foreground: #102235;
+  --foreground-soft: #19314a;
+  --canvas: #faf5ed;
+  --paper: rgba(251, 246, 238, 0.88);
+  --panel: rgba(247, 240, 231, 0.82);
+  --line: rgba(16, 34, 53, 0.1);
+  --line-strong: rgba(16, 34, 53, 0.18);
+  --accent: #d17334;
+  --accent-strong: #b55f27;
+  --accent-soft: rgba(209, 115, 52, 0.12);
+  --ink-soft: rgba(16, 34, 53, 0.64);
+  --success: #256d52;
+  --warning: #995d1d;
+  --danger: #9d3c33;
+  --shadow-soft: 0 28px 60px rgba(13, 25, 38, 0.08);
+  --shadow-strong: 0 40px 80px rgba(7, 17, 28, 0.24);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --font-serif: "Songti SC", "STSong", "Source Han Serif SC", serif;
+  --font-mono: "SFMono-Regular", "Menlo", "Monaco", "IBM Plex Mono", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  background-image:
+    radial-gradient(circle at 10% 12%, rgba(209, 115, 52, 0.16), transparent 24%),
+    radial-gradient(circle at 88% 10%, rgba(36, 78, 118, 0.14), transparent 22%),
+    linear-gradient(180deg, #f1e7d9 0%, #ece1d2 100%);
+}
+
+::selection {
+  background: rgba(209, 115, 52, 0.2);
+}
+
+:focus-visible {
+  outline: 2px solid rgba(209, 115, 52, 0.55);
+  outline-offset: 2px;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+.reveal {
+  animation: reveal 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.studio-glow {
+  background:
+    radial-gradient(circle at 18% 20%, rgba(255, 209, 169, 0.16), transparent 22%),
+    radial-gradient(circle at 82% 22%, rgba(119, 174, 222, 0.14), transparent 26%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.06), transparent 42%);
+}
+
+.paper-preview {
+  background-image:
+    linear-gradient(transparent 31px, rgba(16, 34, 53, 0.05) 32px),
+    linear-gradient(90deg, rgba(209, 115, 52, 0.12), rgba(209, 115, 52, 0.12));
+  background-size: 100% 32px, 2px 100%;
+  background-position: 0 10px, 0 0;
+}
+
+@keyframes reveal {
+  from {
+    opacity: 0;
+    transform: translateY(24px) scale(0.992);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .reveal {
+    animation: none;
+  }
+}
