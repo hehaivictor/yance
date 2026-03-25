@@ -11,10 +11,11 @@ from .workspace_service import (
 
 
 QUESTION_BANK = {
-    "work_scope": "如果只保留一个最适合写进论文的案例或流程场景，你会选哪一个？",
-    "confidentiality_notes": "这个案例里哪些信息必须匿名，匿名要控制到什么粒度？",
-    "mentor_preference_notes": "导师更看重哪一类内容，案例扎实、机制设计、方法应用还是行业问题？",
-    "research_goal": "除了把论文写出来，你最终想形成什么可执行的改进结果或管理方案？",
+    "work_scope": "如果只保留一个最适合写进论文的项目、流程或业务场景，你会选哪一个？",
+    "pain_point": "围绕这个场景，你最想解决的真实管理问题是什么？",
+    "research_direction": "如果让你先说一个拟研究方向，你会更倾向哪一类主题？",
+    "confidentiality_notes": "这个选题里哪些信息必须匿名，匿名要控制到什么粒度？",
+    "research_goal": "除了把论文写出来，你希望最终形成什么可执行成果？",
 }
 
 
@@ -26,12 +27,15 @@ def generate_interview(workspace_id: str) -> dict:
     if not current.get("work_scope"):
         triggers.append("缺少代表性研究场景")
         questions.append(_question_item("work_scope"))
-    if not current.get("confidentiality_notes"):
+    if not current.get("pain_point"):
+        triggers.append("缺少真实管理问题")
+        questions.append(_question_item("pain_point"))
+    if not current.get("research_direction"):
+        triggers.append("拟研究方向不清")
+        questions.append(_question_item("research_direction"))
+    if current.get("company_name") and not current.get("confidentiality_notes"):
         triggers.append("保密边界不清")
         questions.append(_question_item("confidentiality_notes"))
-    if not current.get("mentor_preference_notes"):
-        triggers.append("导师偏好未确认")
-        questions.append(_question_item("mentor_preference_notes"))
     if not current.get("research_goal"):
         triggers.append("研究目标过泛")
         questions.append(_question_item("research_goal"))
@@ -42,7 +46,7 @@ def generate_interview(workspace_id: str) -> dict:
         if field_key in QUESTION_BANK and not any(question["key"] == field_key for question in questions):
             questions.append(_question_item(field_key, suffix="目前多个来源冲突，请你给出最终口径。"))
 
-    questions = questions[:8]
+    questions = questions[:5]
     needs_interview = bool(questions)
     return save_interview_session(
         workspace_id=workspace_id,

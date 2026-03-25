@@ -25,6 +25,7 @@ class Settings:
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     openai_base_url: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+    openai_timeout_seconds: int = int(os.getenv("OPENAI_TIMEOUT_SECONDS", "180"))
     search_timeout_seconds: int = int(os.getenv("YANCE_SEARCH_TIMEOUT", "10"))
     cors_origins: tuple[str, ...] = tuple(
         item.strip()

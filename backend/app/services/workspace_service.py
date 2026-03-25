@@ -8,8 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from ..config import settings
+from ..core.evidence_grounding import build_grounding_context
+from ..core.profile_rules import candidate_recommendation_copy, privacy_safe_text
 from ..core.parsing import (
+    SUPPORTED_PARSE_EXTENSIONS,
     classify_local_file,
+    domain_from_url,
     evidence_summary_from_text,
     extract_metadata,
     extract_urls,
@@ -18,6 +22,7 @@ from ..core.parsing import (
     slug_from_title,
     today_string,
 )
+from ..core.search import fetch_page
 from ..db import get_connection, row_to_dict
 
 
@@ -29,13 +34,19 @@ def load_profile(profile_id: str) -> dict[str, Any]:
     path = settings.profile_dir / f"{profile_id}.json"
     if not path.exists():
         raise FileNotFoundError(f"Unknown profile: {profile_id}")
-    return json.loads(path.read_text(encoding="utf-8"))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    alias_of = payload.get("alias_of")
+    if alias_of:
+        return load_profile(alias_of)
+    return payload
 
 
 def list_profiles() -> list[dict[str, Any]]:
     profiles = []
     for path in sorted(settings.profile_dir.glob("*.json")):
         payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("hidden") or payload.get("alias_of"):
+            continue
         profiles.append({"id": payload["id"], "name": payload["name"]})
     return profiles
 
@@ -51,6 +62,7 @@ def ensure_workspace_dirs(workspace_id: str, name: str) -> Path:
 
 def create_workspace(name: str, school_profile: str) -> dict[str, Any]:
     profile = load_profile(school_profile)
+    canonical_profile_id = profile["id"]
     workspace_id = str(uuid.uuid4())
     workspace_dir = ensure_workspace_dirs(workspace_id, name)
     timestamp = now_string()
@@ -63,7 +75,7 @@ def create_workspace(name: str, school_profile: str) -> dict[str, Any]:
             (
                 workspace_id,
                 name,
-                school_profile,
+                canonical_profile_id,
                 "draft",
                 str(workspace_dir),
                 None,
@@ -95,7 +107,15 @@ def list_workspaces() -> list[dict[str, Any]]:
             ORDER BY updated_at DESC
             """
         ).fetchall()
-    return [dict(row) for row in rows]
+    items = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["school_profile"] = load_profile(item["school_profile"])["id"]
+        except Exception:
+            pass
+        items.append(item)
+    return items
 
 
 def delete_workspace(workspace_id: str) -> dict[str, Any]:
@@ -290,6 +310,66 @@ def list_evidence_items(workspace_id: str) -> list[dict[str, Any]]:
     return items
 
 
+def delete_local_file_evidence(workspace_id: str, evidence_id: str) -> dict[str, Any]:
+    workspace = get_workspace_row(workspace_id)
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT id, evidence_type, title, source_uri, metadata_json
+            FROM evidence_items
+            WHERE workspace_id = ? AND id = ?
+            """,
+            (workspace_id, evidence_id),
+        ).fetchone()
+    if row is None:
+        raise KeyError(f"File evidence not found: {evidence_id}")
+    item = dict(row)
+    if item["evidence_type"] != "local_file":
+        raise ValueError("Only local files can be deleted")
+    metadata = json.loads(item.get("metadata_json") or "{}")
+    source_uri = str(item.get("source_uri") or metadata.get("path") or "")
+    _purge_local_file_records(workspace_id, source_uri, delete_file=True, workspace_dir=Path(workspace["workspace_dir"]))
+    touch_workspace(workspace_id)
+    return {
+        "deleted": True,
+        "evidence_id": evidence_id,
+        "title": item["title"],
+    }
+
+
+def _purge_local_file_records(
+    workspace_id: str,
+    source_uri: str,
+    *,
+    delete_file: bool,
+    workspace_dir: Path,
+) -> None:
+    normalized_uri = str(source_uri or "").strip()
+    if not normalized_uri:
+        return
+    with get_connection() as connection:
+        connection.execute(
+            "DELETE FROM field_values WHERE workspace_id = ? AND source_uri = ?",
+            (workspace_id, normalized_uri),
+        )
+        connection.execute(
+            "DELETE FROM evidence_items WHERE workspace_id = ? AND evidence_type = 'local_file' AND source_uri = ?",
+            (workspace_id, normalized_uri),
+        )
+    if not delete_file:
+        return
+    target_path = Path(normalized_uri)
+    workspace_sources = (workspace_dir / "sources").resolve()
+    try:
+        resolved_target = target_path.resolve()
+    except FileNotFoundError:
+        return
+    if resolved_target != workspace_sources and workspace_sources not in resolved_target.parents:
+        return
+    if resolved_target.exists():
+        resolved_target.unlink()
+
+
 def save_interview_session(
     workspace_id: str,
     needs_interview: bool,
@@ -402,6 +482,10 @@ def replace_title_candidates(workspace_id: str, candidates: list[dict[str, Any]]
                     timestamp,
                 ),
             )
+        connection.execute(
+            "UPDATE workspaces SET selected_title_id = ?, updated_at = ? WHERE id = ?",
+            (selected_title_id, timestamp, workspace_id),
+        )
     if selected_title_id:
         set_selected_title(workspace_id, selected_title_id)
     touch_workspace(workspace_id)
@@ -421,6 +505,11 @@ def set_selected_title(workspace_id: str, title_id: str) -> None:
 
 
 def list_title_candidates(workspace_id: str) -> list[dict[str, Any]]:
+    current_fields = current_field_map(workspace_id)
+    evidence_items = list_evidence_items(workspace_id)
+    grounding = build_grounding_context(current_fields, evidence_items, allow_llm=False)
+    company_name = str(current_fields.get("company_name") or "")
+    confidentiality = str(current_fields.get("confidentiality_notes") or "")
     with get_connection() as connection:
         rows = connection.execute(
             """
@@ -435,8 +524,33 @@ def list_title_candidates(workspace_id: str) -> list[dict[str, Any]]:
     for row in rows:
         item = dict(row)
         item["selected"] = bool(item["selected"])
+        item["title"] = privacy_safe_text(str(item.get("title") or ""), company_name, confidentiality)
+        stored_recommendation = privacy_safe_text(
+            str(item.get("recommendation") or "").strip(),
+            company_name,
+            confidentiality,
+        )
+        if not stored_recommendation:
+            stored_recommendation = privacy_safe_text(
+                candidate_recommendation_copy(
+                    item["title"],
+                    current_fields,
+                    grounding,
+                    is_top=len(items) == 0,
+                ),
+                company_name,
+                confidentiality,
+            )
+        item["recommendation"] = stored_recommendation
+        item["caution"] = privacy_safe_text(str(item.get("caution") or ""), company_name, confidentiality)
         item["reasons"] = json.loads(item.pop("reasons_json") or "[]")
         item["risk_tags"] = json.loads(item.pop("risk_tags_json") or "[]")
+        item["reasons"] = _sanitize_candidate_reasons(item["reasons"], company_name, confidentiality)
+        item["risk_tags"] = [
+            privacy_safe_text(str(tag or "").strip(), company_name, confidentiality)
+            for tag in item["risk_tags"]
+            if str(tag or "").strip()
+        ]
         items.append(item)
     return items
 
@@ -496,8 +610,9 @@ def ingest_local_file(workspace_id: str, source_path: Path, custom_category: str
     target_path = source_dir / source_path.name
     if source_path.resolve() != target_path.resolve():
         shutil.copy2(source_path, target_path)
+    _purge_local_file_records(workspace_id, str(target_path), delete_file=False, workspace_dir=Path(workspace["workspace_dir"]))
     category = custom_category or classify_local_file(target_path)
-    text = read_text(target_path) if target_path.suffix.lower() in {".md", ".txt", ".docx", ".pdf"} else ""
+    text = read_text(target_path) if target_path.suffix.lower() in SUPPORTED_PARSE_EXTENSIONS else ""
     metadata = extract_metadata(text)
     evidence = add_evidence_item(
         workspace_id=workspace_id,
@@ -515,7 +630,7 @@ def ingest_local_file(workspace_id: str, source_path: Path, custom_category: str
             "metadata": metadata,
             "urls": extract_urls(text),
         },
-        content={"excerpt": text[:4000]},
+        content={"text": text[:12000], "excerpt": text[:4000]},
     )
     for key, value in metadata.items():
         add_field_value(
@@ -527,6 +642,45 @@ def ingest_local_file(workspace_id: str, source_path: Path, custom_category: str
             source_uri=str(target_path),
             source_grade=evidence["grade"],
             confidence=0.85,
+            confirmed=False,
+        )
+    return evidence
+
+
+def ingest_web_link(workspace_id: str, url: str) -> dict[str, Any]:
+    page = fetch_page(url)
+    text = page.get("text", "")
+    metadata = extract_metadata(text)
+    domain = domain_from_url(url)
+    status = "verified" if page.get("status") == "verified" else "pending_confirmation"
+    grade = "B" if status == "verified" else "C"
+    evidence = add_evidence_item(
+        workspace_id=workspace_id,
+        evidence_type="web_page",
+        title=page.get("title") or url,
+        summary=evidence_summary_from_text(text or url),
+        grade=grade,
+        status=status,
+        source_label="用户链接",
+        source_uri=url,
+        source_date=page.get("published_date", ""),
+        metadata={
+            "category": "user_link",
+            "domain": domain,
+            "metadata": metadata,
+        },
+        content={"text": text[:12000], "excerpt": text[:4000]},
+    )
+    for key, value in metadata.items():
+        add_field_value(
+            workspace_id=workspace_id,
+            field_key=key,
+            value=value,
+            source_label=page.get("title") or domain or "用户链接",
+            source_kind="official_web" if domain else "user_input",
+            source_uri=url,
+            source_grade=grade,
+            confidence=0.78,
             confirmed=False,
         )
     return evidence
@@ -546,9 +700,9 @@ def _field_rank(item: dict[str, Any]) -> tuple[int, int, int, float, str]:
     confirmed_weight = 1 if item["confirmed"] else 0
     return (
         confirmed_weight,
-        grade_weight,
         kind_weight,
         float(item["confidence"]),
+        grade_weight,
         item["captured_at"],
     )
 
@@ -572,7 +726,7 @@ def group_field_values(workspace_id: str) -> dict[str, dict[str, Any]]:
 
 def current_field_map(workspace_id: str) -> dict[str, Any]:
     groups = group_field_values(workspace_id)
-    return {key: payload["current"]["value"] for key, payload in groups.items()}
+    return {key: _effective_current_value(key, payload["current"]) for key, payload in groups.items()}
 
 
 def build_risks(workspace_id: str) -> list[dict[str, Any]]:
@@ -582,11 +736,10 @@ def build_risks(workspace_id: str) -> list[dict[str, Any]]:
     deliverable = get_latest_deliverable_bundle(workspace_id)
     risks: list[dict[str, Any]] = []
     required_fields = {
-        "mentor_name": "导师信息缺失，题目推荐会偏离导师偏好。",
-        "company_name": "单位信息缺失，题目可能脱离真实研究对象。",
-        "role_title": "岗位职责缺失，无法准确评估岗位贴合度。",
-        "pain_point": "真实痛点缺失，容易生成空泛选题。",
-        "data_sources": "资料来源缺失，后续正文无法稳定落地。",
+        "school_name": "学校名称缺失，无法准确匹配论文撰写要求。",
+        "mentor_name": "导师姓名缺失，系统无法补全导师研究方向。",
+        "student_name": "学生姓名缺失，导出材料无法形成完整封面信息。",
+        "student_id": "学号缺失，导出材料和归档信息不完整。",
     }
     for field_key, description in required_fields.items():
         if not fields.get(field_key, {}).get("current", {}).get("value"):
@@ -609,12 +762,12 @@ def build_risks(workspace_id: str) -> list[dict[str, Any]]:
                 }
             )
     verified_sources = [item for item in evidence_items if item["grade"] in {"A", "B"}]
-    if len(verified_sources) < 5:
+    if len(verified_sources) < 3:
         risks.append(
             {
                 "id": "evidence:insufficient",
                 "title": "高等级证据不足",
-                "body": "A/B 级证据少于 5 条，题目和正文容易失真。",
+                "body": "A/B 级证据少于 3 条，题目和正文容易失真。",
                 "priority": 3,
             }
         )
@@ -672,7 +825,7 @@ def create_snapshot(workspace_id: str, name: str, payload: dict[str, Any]) -> st
 def get_workspace_bundle(workspace_id: str) -> dict[str, Any]:
     workspace = get_workspace_row(workspace_id)
     field_groups = group_field_values(workspace_id)
-    current_fields = {key: payload["current"]["value"] for key, payload in field_groups.items()}
+    current_fields = {key: _effective_current_value(key, payload["current"]) for key, payload in field_groups.items()}
     evidence_items = list_evidence_items(workspace_id)
     titles = list_title_candidates(workspace_id)
     interview = get_latest_interview_session(workspace_id)
@@ -685,6 +838,10 @@ def get_workspace_bundle(workspace_id: str) -> dict[str, Any]:
             "name": profile["name"],
             "required_sections": profile["required_sections"],
             "deck_outline": profile["deck_outline"],
+            "guide_title": (profile.get("guide") or {}).get("title", ""),
+            "guide_summary": (profile.get("guide") or {}).get("summary", ""),
+            "guide_version": (profile.get("guide") or {}).get("issued_at", ""),
+            "guide_builtin": bool((profile.get("guide") or {}).get("title")),
         },
         "current_fields": current_fields,
         "field_groups": list(field_groups.values()),
@@ -702,3 +859,29 @@ def get_workspace_bundle(workspace_id: str) -> dict[str, Any]:
             ),
         },
     }
+
+
+def _effective_current_value(field_key: str, current: dict[str, Any]) -> str:
+    value = str(current.get("value") or "")
+    if (
+        field_key == "research_direction"
+        and value.strip() == "工商管理"
+        and str(current.get("source_kind") or "") == "profile"
+    ):
+        return ""
+    return value
+
+
+def _sanitize_candidate_reasons(reasons: list[str], company_name: str, confidentiality: str) -> list[str]:
+    cleaned: list[str] = []
+    generic_prefixes = (
+        "题目长度符合武汉大学指南",
+        "题目表述接近武汉大学经管类专业硕士常用口径",
+    )
+    for reason in reasons:
+        text = privacy_safe_text(str(reason or "").strip(), company_name, confidentiality)
+        if not text or any(text.startswith(prefix) for prefix in generic_prefixes):
+            continue
+        if text not in cleaned:
+            cleaned.append(text)
+    return cleaned

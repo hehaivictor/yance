@@ -15,10 +15,12 @@ from ..services.recommendation_service import recommend_titles
 from ..services.workspace_service import (
     add_field_value,
     create_workspace,
+    delete_local_file_evidence,
     delete_workspace,
     get_latest_deliverable_bundle,
     get_workspace_bundle,
     ingest_local_file,
+    ingest_web_link,
     list_profiles,
     list_workspaces,
     set_selected_title,
@@ -30,7 +32,7 @@ router = APIRouter(prefix="/api")
 
 class WorkspaceCreatePayload(BaseModel):
     name: str = Field(..., min_length=2)
-    school_profile: str = "whu-emba"
+    school_profile: str = "whu"
 
 
 class FieldValuePayload(BaseModel):
@@ -45,6 +47,10 @@ class FieldUpdatePayload(BaseModel):
 
 class InterviewAnswerPayload(BaseModel):
     answers: dict[str, str]
+
+
+class LinkImportPayload(BaseModel):
+    urls: list[str]
 
 
 class TitleSelectPayload(BaseModel):
@@ -130,6 +136,17 @@ async def upload_files_endpoint(
     return {"uploaded": created, "workspace": get_workspace_bundle(workspace_id)}
 
 
+@router.delete("/workspaces/{workspace_id}/files/{evidence_id}")
+def delete_uploaded_file_endpoint(workspace_id: str, evidence_id: str) -> dict[str, Any]:
+    try:
+        result = delete_local_file_evidence(workspace_id, evidence_id)
+        return {**result, "workspace": get_workspace_bundle(workspace_id)}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/workspaces/{workspace_id}/citations/upload")
 async def upload_citations_endpoint(
     workspace_id: str,
@@ -143,6 +160,17 @@ async def upload_citations_endpoint(
         target.write_bytes(await upload.read())
         created.extend(import_citation_file(workspace_id, target))
     return {"citations": created, "workspace": get_workspace_bundle(workspace_id)}
+
+
+@router.post("/workspaces/{workspace_id}/links/import")
+def import_links_endpoint(workspace_id: str, payload: LinkImportPayload) -> dict[str, Any]:
+    created = []
+    for url in payload.urls:
+        normalized = url.strip()
+        if not normalized:
+            continue
+        created.append(ingest_web_link(workspace_id, normalized))
+    return {"links": created, "workspace": get_workspace_bundle(workspace_id)}
 
 
 @router.post("/workspaces/{workspace_id}/enrich")
@@ -226,4 +254,4 @@ def download_artifact_endpoint(workspace_id: str, artifact_name: str) -> FileRes
     path = Path(allowed[artifact_name])
     if not path.exists():
         raise HTTPException(status_code=404, detail="Artifact file not found")
-    return FileResponse(path)
+    return FileResponse(path, filename=path.name)

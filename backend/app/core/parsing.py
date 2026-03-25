@@ -10,6 +10,9 @@ from urllib.parse import urlparse
 
 import bibtexparser
 from docx import Document
+from pptx import Presentation
+
+from .llm import LLMError, extract_image_text, is_enabled
 
 try:
     from pypdf import PdfReader
@@ -17,7 +20,9 @@ except Exception:  # pragma: no cover
     PdfReader = None
 
 
-SUPPORTED_TEXT_EXTENSIONS = {".md", ".txt", ".docx", ".pdf"}
+SUPPORTED_TEXT_EXTENSIONS = {".md", ".txt", ".docx", ".pdf", ".pptx"}
+SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
+SUPPORTED_PARSE_EXTENSIONS = SUPPORTED_TEXT_EXTENSIONS | SUPPORTED_IMAGE_EXTENSIONS
 
 FIELD_HINT_PATTERNS = {
     "student_name": [r"学生[：:]\s*([^\s/，,。]{2,8})"],
@@ -47,6 +52,22 @@ def read_text(path: Path) -> str:
         for page in reader.pages[:10]:
             chunks.append(page.extract_text() or "")
         return "\n".join(chunks)
+    if suffix == ".pptx":
+        deck = Presentation(str(path))
+        chunks: list[str] = []
+        for slide in deck.slides:
+            for shape in slide.shapes:
+                text = getattr(shape, "text", "")
+                if text:
+                    chunks.append(text.strip())
+        return "\n".join(item for item in chunks if item)
+    if suffix in SUPPORTED_IMAGE_EXTENSIONS:
+        if not is_enabled():
+            return ""
+        try:
+            return _normalize_ocr_text(extract_image_text(path))
+        except LLMError:
+            return ""
     return ""
 
 
@@ -211,3 +232,14 @@ def slug_from_title(title: str) -> str:
 
 def today_string() -> str:
     return date.today().isoformat()
+
+
+def _normalize_ocr_text(text: str) -> str:
+    cleaned = str(text or "").strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`").strip()
+        if cleaned.lower().startswith("text"):
+            cleaned = cleaned[4:].strip()
+    if cleaned in {"空字符串", "未识别到文字", "未检测到文字", "无可辨识文字"}:
+        return ""
+    return cleaned

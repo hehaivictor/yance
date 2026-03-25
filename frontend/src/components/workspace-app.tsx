@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, type ReactNode, useEffect, useState, useTransition } from "react";
+import { type DragEvent, type FormEvent, type ReactNode, type RefObject, useCallback, useEffect, useRef, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
 const BRAND = {
@@ -8,8 +8,128 @@ const BRAND = {
   enName: "Yance",
   zhPosition: "专业学位论文开题智能参谋",
   enPosition: "Academic Proposal Strategist",
-  slogan: "让开题更成体系",
 } as const;
+
+const corporateSuffixes = ["股份有限公司", "有限责任公司", "有限公司", "集团公司", "集团", "公司"] as const;
+const nonCompanyHints = ["大学", "学院", "研究院", "医院", "实验室", "中心", "事务所", "协会", "委员会", "政府", "机关", "学校"] as const;
+const locationPrefixes = [
+  "北京",
+  "上海",
+  "广州",
+  "深圳",
+  "武汉",
+  "杭州",
+  "南京",
+  "苏州",
+  "成都",
+  "重庆",
+  "天津",
+  "西安",
+  "长沙",
+  "青岛",
+  "厦门",
+  "福州",
+  "合肥",
+  "郑州",
+  "济南",
+  "宁波",
+  "无锡",
+  "东莞",
+  "佛山",
+  "珠海",
+  "南昌",
+  "沈阳",
+  "大连",
+  "长春",
+  "哈尔滨",
+  "昆明",
+  "贵阳",
+  "南宁",
+  "海口",
+  "石家庄",
+  "太原",
+  "兰州",
+  "西宁",
+  "银川",
+  "呼和浩特",
+  "乌鲁木齐",
+  "拉萨",
+  "湖北",
+  "湖南",
+  "广东",
+  "广西",
+  "浙江",
+  "江苏",
+  "山东",
+  "河南",
+  "河北",
+  "山西",
+  "福建",
+  "江西",
+  "辽宁",
+  "吉林",
+  "黑龙江",
+  "陕西",
+  "四川",
+  "云南",
+  "贵州",
+  "甘肃",
+  "青海",
+  "海南",
+  "安徽",
+] as const;
+const businessSuffixes = [
+  "信息技术",
+  "工业软件",
+  "管理咨询",
+  "软件技术",
+  "数字科技",
+  "智能科技",
+  "科技服务",
+  "信息服务",
+  "技术服务",
+  "信息",
+  "技术",
+  "科技",
+  "软件",
+  "服饰",
+  "网络",
+  "数据",
+  "智能",
+  "管理",
+  "咨询",
+  "服务",
+  "实业",
+  "制造",
+  "电子",
+  "系统",
+  "工程",
+] as const;
+const pinyinBoundaries = [
+  ["阿", "A"],
+  ["芭", "B"],
+  ["擦", "C"],
+  ["搭", "D"],
+  ["蛾", "E"],
+  ["发", "F"],
+  ["噶", "G"],
+  ["哈", "H"],
+  ["机", "J"],
+  ["喀", "K"],
+  ["垃", "L"],
+  ["妈", "M"],
+  ["拿", "N"],
+  ["哦", "O"],
+  ["啪", "P"],
+  ["期", "Q"],
+  ["然", "R"],
+  ["撒", "S"],
+  ["塌", "T"],
+  ["挖", "W"],
+  ["昔", "X"],
+  ["压", "Y"],
+  ["匝", "Z"],
+] as const;
 
 type WorkspaceSummary = {
   id: string;
@@ -113,8 +233,8 @@ type ProfileOption = { id: string; name: string };
 
 type ActionResponse = {
   workspace?: WorkspaceBundle;
-  report?: { report_markdown?: string };
-  deliverables?: { report?: { report_markdown?: string } };
+  report?: { report_markdown?: string; report_title?: string };
+  deliverables?: { report?: { report_markdown?: string; report_title?: string } };
 };
 
 type DeleteWorkspaceResponse = {
@@ -123,71 +243,79 @@ type DeleteWorkspaceResponse = {
   name: string;
 };
 
+type DeleteUploadedFileResponse = {
+  deleted: boolean;
+  evidence_id: string;
+  title: string;
+  workspace: WorkspaceBundle;
+};
+
 type WorkspaceSection = "background" | "titles" | "proposal" | "materials";
+type WorkspaceAction = "interview" | "recommend" | "generate-report" | "freeze-deliverables";
+type ExportFormat = "word" | "ppt";
+type DownloadArtifact = "report_md" | "report_docx" | "deck_pptx" | "notes_docx" | "snapshot";
+type ReportSection = {
+  heading: string;
+  blocks: string[];
+};
 
 const editableKeys = [
-  ["student_name", "学生姓名", "例如：程闯", "single"],
-  ["mentor_name", "导师姓名", "例如：庄子银", "single"],
-  ["company_name", "单位名称", "例如：开目软件", "single"],
-  ["role_title", "岗位名称", "例如：AI 产品负责人", "single"],
-  ["work_scope", "代表性场景", "写最适合进入论文的一个业务、项目或流程场景。", "multi"],
-  ["pain_point", "真实痛点", "不要写愿景，要写最具体、最难的管理问题。", "multi"],
-  ["data_sources", "可用材料", "写明内部资料、访谈对象、流程文档、项目复盘等。", "multi"],
-  ["research_goal", "预期成果", "这篇论文最终要形成什么改进结果或方案。", "multi"],
-  ["confidentiality_notes", "保密边界", "例如：公司需化名、项目名称不便公开。", "multi"],
+  ["school_name", "学校名称", "例如：武汉大学", "single"],
+  ["mentor_name", "导师姓名", "例如：王建国", "single"],
+  ["student_name", "学生姓名", "例如：李军", "single"],
+  ["student_id", "学号", "例如：2024012345", "single"],
+  ["company_name", "工作单位", "例如：武汉思维创新股份有限公司", "single"],
+  ["role_title", "工作职位", "例如：AI 产品负责人", "single"],
+  ["work_scope", "负责内容描述", "写明你主要负责的业务、项目、流程或团队工作。", "multi"],
+  ["research_direction", "拟研究方向", "例如：AI 智能体落地、组织协同、数据治理等。", "multi"],
 ] as const;
 
 const fieldLabels = Object.fromEntries(
   editableKeys.map(([key, label]) => [key, label]),
 ) as Record<string, string>;
+fieldLabels.pain_point = "真实管理问题";
+fieldLabels.research_goal = "预期成果";
+fieldLabels.confidentiality_notes = "保密边界";
+fieldLabels.mentor_title = "导师职称";
+fieldLabels.program_name = "项目类型";
+fieldLabels.school_requirement_url = "写作要求链接";
+fieldLabels.mentor_source_url = "导师来源链接";
+fieldLabels.company_profile_url = "单位来源链接";
 
-const evidenceTypeLabels: Record<string, string> = {
-  citation: "文献条目",
-  local_file: "本地资料",
-  web_page: "网页事实",
-  web_search: "联网检索",
-  interview: "访谈纪要",
-  generated_outline: "结构草案",
-};
-
-const evidenceStatusLabels: Record<string, string> = {
-  verified: "已核验",
-  pending: "待核验",
-  draft: "待补全",
-  blocked: "已拦截",
-};
-
-const scoreLabels = ["学校", "导师", "岗位", "资料", "保密"] as const;
-const coreFieldKeys = ["mentor_name", "company_name", "role_title", "pain_point", "data_sources"] as const;
-const primaryEditableKeys = editableKeys.filter(([key]) => coreFieldKeys.includes(key as (typeof coreFieldKeys)[number]));
-const optionalEditableKeys = editableKeys.filter(([key]) => !coreFieldKeys.includes(key as (typeof coreFieldKeys)[number]));
+const coreFieldKeys = ["school_name", "mentor_name", "student_name", "student_id"] as const;
+const mentorFieldKeys = ["school_name", "mentor_name"] as const;
+const studentFieldKeys = ["student_name", "student_id"] as const;
+const optionalFieldKeys = ["company_name", "role_title", "work_scope", "research_direction"] as const;
+const mentorEditableKeys = editableKeys.filter(([key]) => mentorFieldKeys.includes(key as (typeof mentorFieldKeys)[number]));
+const studentEditableKeys = editableKeys.filter(([key]) => studentFieldKeys.includes(key as (typeof studentFieldKeys)[number]));
+const optionalEditableKeys = editableKeys.filter(([key]) => optionalFieldKeys.includes(key as (typeof optionalFieldKeys)[number]));
 const sectionMeta: Record<
   WorkspaceSection,
   { label: string; title: string; body: string; short: string }
 > = {
   background: {
-    label: "项目背景",
-    title: "项目背景",
-    body: "先把导师、单位、岗位、真实痛点和可用材料说清楚，系统会自动补全公开信息。",
-    short: "背景",
+    label: "基础信息",
+    title: "基础信息",
+    body: "先填必填项，再补资料。",
+    short: "信息",
   },
   titles: {
-    label: "推荐题目",
-    title: "推荐题目",
-    body: "必要时先补几个关键问题，再比较候选题，最后只冻结一个题目继续写。",
+    label: "推荐选题",
+    title: "推荐选题",
+    body: "保存后直接生成候选题。",
     short: "题目",
   },
   proposal: {
-    label: "开题报告",
-    title: "开题报告",
-    body: "围绕已冻结题目查看结构、论证方向和报告草稿，确认后再进入答辩材料。",
-    short: "报告",
+    label: "开题生成",
+    title: "开题生成",
+    body: "选题后直接生成报告，并从这里导出 Word 或 PPT。",
+    short: "生成",
   },
   materials: {
-    label: "答辩材料",
-    title: "答辩材料",
+    label: "开题生成",
+    title: "开题生成",
     body: "Word、PPT、讲稿和来源快照只从冻结版报告派生，避免口径漂移。",
-    short: "材料",
+    short: "生成",
   },
 };
 
@@ -202,25 +330,110 @@ function prettifyCopy(value: string) {
   );
 }
 
-function getEvidenceTypeLabel(value: string) {
-  return evidenceTypeLabels[value] || value.replaceAll("_", " ");
+function extractReportTitleFromPath(path: string | undefined) {
+  const normalized = String(path || "").trim();
+  if (!normalized) return "";
+  const filename = normalized.split("/").pop() || "";
+  return filename
+    .replace(/-开题报告\.(md|docx)$/i, "")
+    .replace(/-report\.md$/i, "")
+    .trim();
 }
 
-function getEvidenceStatusLabel(value: string) {
-  return evidenceStatusLabels[value] || value;
+function anonymizedSubjectName(name: string, confidentiality = "") {
+  const normalized = String(name || "").trim();
+  if (!normalized) return "研究对象";
+  const confidential = ["匿名", "保密", "不便披露", "化名"].some((keyword) =>
+    String(confidentiality || "").includes(keyword),
+  );
+  const isCompany = !nonCompanyHints.some((hint) => normalized.includes(hint));
+  if (confidential) return isCompany ? "K公司" : "K单位";
+  const initial = subjectAliasInitial(normalized) || "K";
+  return isCompany ? `${initial}公司` : `${initial}单位`;
 }
 
-function getRiskPriorityLabel(priority: number) {
-  if (priority >= 4) return "关键";
-  if (priority >= 3) return "高";
-  if (priority >= 2) return "中";
-  return "低";
+function shortenSubjectName(name: string, maxLength = 10) {
+  const normalized = String(name || "").trim();
+  if (!normalized || normalized.length <= maxLength) return normalized;
+  let stripped = normalized;
+  corporateSuffixes.forEach((suffix) => {
+    if (stripped.endsWith(suffix)) {
+      stripped = stripped.slice(0, -suffix.length).trim();
+    }
+  });
+  if (stripped && stripped.length <= maxLength) return stripped;
+  return (stripped || normalized).slice(0, maxLength);
 }
 
-function getRiskTone(priority: number): "danger" | "warning" | "muted" {
-  if (priority >= 4) return "danger";
-  if (priority >= 2) return "warning";
-  return "muted";
+function subjectAliasInitial(name: string) {
+  const core = companyCoreName(name);
+  const firstChar = core.charAt(0);
+  if (!firstChar) return "";
+  if (/^[A-Za-z]$/.test(firstChar)) return firstChar.toUpperCase();
+  for (let index = pinyinBoundaries.length - 1; index >= 0; index -= 1) {
+    const [boundary, initial] = pinyinBoundaries[index];
+    if (firstChar.localeCompare(boundary, "zh-CN-u-co-pinyin") >= 0) {
+      return initial;
+    }
+  }
+  return "";
+}
+
+function companyCoreName(name: string) {
+  const normalized = String(name || "").replace(/[\s·•()（）\-_/]+/g, "").trim();
+  if (!normalized) return "";
+  let stripped = normalized;
+  corporateSuffixes.forEach((suffix) => {
+    if (stripped.endsWith(suffix)) {
+      stripped = stripped.slice(0, -suffix.length).trim();
+    }
+  });
+  let core = stripped || normalized;
+  locationPrefixes.some((prefix) => {
+    if (core.startsWith(prefix) && core.length > prefix.length + 1) {
+      core = core.slice(prefix.length).trim();
+      return true;
+    }
+    return false;
+  });
+  businessSuffixes.some((suffix) => {
+    if (core.endsWith(suffix) && core.length > suffix.length + 1) {
+      core = core.slice(0, -suffix.length).trim();
+      return true;
+    }
+    return false;
+  });
+  return core || stripped || normalized;
+}
+
+function privacySafeReportTitle(title: string, companyName = "", confidentiality = "") {
+  let normalized = String(title || "").trim();
+  const subjectName = String(companyName || "").trim();
+  if (!normalized || !subjectName) return normalized;
+  const alias = anonymizedSubjectName(subjectName, confidentiality);
+  const replacements = new Set<string>([subjectName, shortenSubjectName(subjectName)]);
+  let stripped = subjectName;
+  corporateSuffixes.forEach((suffix) => {
+    if (stripped.endsWith(suffix)) {
+      stripped = stripped.slice(0, -suffix.length).trim();
+    }
+  });
+  if (stripped) replacements.add(stripped);
+  Array.from(replacements)
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length)
+    .forEach((candidate) => {
+      normalized = normalized.replaceAll(candidate, alias);
+    });
+  return normalized;
+}
+
+function sanitizedDraftValue(key: string, value: string) {
+  const normalized = String(value || "").trim();
+  if (key === "research_direction" && normalized === "工商管理") {
+    return "";
+  }
+  return value || "";
 }
 
 type NextStepInfo = {
@@ -246,7 +459,7 @@ function getNextStepInfo(
   const missingCoreFields = coreFieldKeys.filter((key) => !(bundle.current_fields[key] || "").trim());
   if (missingCoreFields.length) {
     return {
-      title: "先补全基本信息",
+      title: "先补全导师和学生必填信息",
       body: `至少还缺 ${missingCoreFields.map((key) => getFieldLabel(key)).join("、")}，题目推荐会明显失真。`,
       tone: "warning",
       section: "background",
@@ -278,26 +491,30 @@ function getNextStepInfo(
   }
   if (!reportPreview && !bundle.deliverable_bundle) {
     return {
-      title: "生成开题报告草稿",
-      body: "先看正文结构和论证方向，再决定要不要导出正式材料。",
+      title: "生成开题报告",
+      body: "题目确定后先生成报告草稿，再统一导出 Word、PPT 和讲稿。",
       tone: "warning",
       section: "proposal",
     };
   }
   if (!bundle.deliverable_bundle) {
     return {
-      title: "冻结并导出材料",
-      body: "题目和草稿已经有了，下一步直接生成 Word、PPT 和讲稿。",
+      title: "导出开题材料",
+      body: "报告草稿已经有了，下一步直接生成 Word、PPT 和讲稿。",
       tone: "warning",
-      section: "materials",
+      section: "proposal",
     };
   }
   return {
-    title: "检查并下载最终材料",
+    title: "检查并下载开题材料",
     body: "现在重点看题目、研究问题和讲稿口径是否一致，再下载导出件。",
     tone: "success",
-    section: "materials",
+    section: "proposal",
   };
+}
+
+function normalizeSection(section: WorkspaceSection): WorkspaceSection {
+  return section === "materials" ? "proposal" : section;
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -309,52 +526,258 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+function toErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "请求失败";
+}
+
+async function fetchArtifactText(workspaceId: string, artifactName: DownloadArtifact): Promise<string> {
+  const response = await fetch(`${API_BASE}/api/workspaces/${workspaceId}/download/${artifactName}`);
+  if (!response.ok) {
+    throw new Error(`读取报告失败: ${response.status}`);
+  }
+  return response.text();
+}
+
+function parseReportMarkdown(markdown: string) {
+  const normalized = String(markdown || "").replace(/\r/g, "").trim();
+  const lines = normalized.split("\n");
+  const sections: ReportSection[] = [];
+  let title = "";
+  let currentSection: ReportSection | null = null;
+  let blockBuffer: string[] = [];
+
+  const flushBlock = () => {
+    if (!currentSection) return;
+    const block = blockBuffer.join("\n").trim();
+    if (block) {
+      currentSection.blocks.push(block);
+    }
+    blockBuffer = [];
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd();
+    if (!line.trim()) {
+      flushBlock();
+      continue;
+    }
+    if (line.startsWith("# ")) {
+      title = line.replace(/^#\s+/, "").trim();
+      continue;
+    }
+    if (line.startsWith("## ")) {
+      flushBlock();
+      if (currentSection) {
+        sections.push(currentSection);
+      }
+      currentSection = {
+        heading: line.replace(/^##\s+/, "").trim(),
+        blocks: [],
+      };
+      continue;
+    }
+    if (!currentSection) {
+      currentSection = {
+        heading: "开题摘要",
+        blocks: [],
+      };
+    }
+    blockBuffer.push(line);
+  }
+
+  flushBlock();
+  if (currentSection) {
+    sections.push(currentSection);
+  }
+
+  return { title, sections };
+}
+
+function formatSectionIndex(index: number) {
+  return String(index + 1).padStart(2, "0");
+}
+
+function sanitizeDownloadFilename(value: string) {
+  return String(value || "")
+    .replace(/[\\/:*?"<>|]+/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function artifactPathFromBundle(bundle: WorkspaceBundle | null, artifactName: DownloadArtifact) {
+  if (!bundle?.deliverable_bundle) return "";
+  const artifactMap: Record<DownloadArtifact, string> = {
+    report_md: bundle.deliverable_bundle.report_markdown_path,
+    report_docx: bundle.deliverable_bundle.report_docx_path,
+    deck_pptx: bundle.deliverable_bundle.deck_pptx_path,
+    notes_docx: bundle.deliverable_bundle.notes_docx_path,
+    snapshot: bundle.deliverable_bundle.snapshot_path,
+  };
+  return artifactMap[artifactName] || "";
+}
+
+function preferredArtifactFilename(bundle: WorkspaceBundle | null, artifactName: DownloadArtifact, fallbackTitle: string) {
+  const path = artifactPathFromBundle(bundle, artifactName);
+  const fromPath = path.split("/").pop() || "";
+  if (fromPath) return fromPath;
+
+  const safeTitle = sanitizeDownloadFilename(fallbackTitle || "开题材料") || "开题材料";
+  const fallbackMap: Record<DownloadArtifact, string> = {
+    report_md: `${safeTitle}-report.md`,
+    report_docx: `${safeTitle}-开题报告.docx`,
+    deck_pptx: `${safeTitle}-答辩稿.pptx`,
+    notes_docx: `${safeTitle}-讲稿.docx`,
+    snapshot: `${safeTitle}-snapshot.json`,
+  };
+  return fallbackMap[artifactName];
+}
+
 export function WorkspaceApp() {
   const [profiles, setProfiles] = useState<ProfileOption[]>([]);
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
   const [bundle, setBundle] = useState<WorkspaceBundle | null>(null);
   const [workspaceName, setWorkspaceName] = useState("我的研策开题项目");
-  const [profileId, setProfileId] = useState("whu-emba");
+  const [profileId, setProfileId] = useState("whu");
   const [fieldDraft, setFieldDraft] = useState<Record<string, string>>({});
   const [interviewDraft, setInterviewDraft] = useState<Record<string, string>>({});
+  const [linkDraft, setLinkDraft] = useState("");
   const [reportPreview, setReportPreview] = useState("");
+  const [reportTitle, setReportTitle] = useState("");
   const [message, setMessage] = useState("先创建一个研策项目");
   const [error, setError] = useState("");
   const [deletingWorkspaceId, setDeletingWorkspaceId] = useState<string | null>(null);
+  const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
+  const [runningAction, setRunningAction] = useState<WorkspaceAction | null>(null);
+  const [isSelectingTitle, setIsSelectingTitle] = useState(false);
+  const [isAdvancingToTitles, setIsAdvancingToTitles] = useState(false);
+  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
+  const [exportingFormat, setExportingFormat] = useState<ExportFormat | null>(null);
   const [activeSection, setActiveSection] = useState<WorkspaceSection>("background");
-  const [isPending, startTransition] = useTransition();
+  const exportMenuRef = useRef<HTMLDivElement | null>(null);
 
   const selectedTitle = bundle?.title_candidates.find((item) => item.selected);
+  const uploadedLocalFiles = bundle?.evidence_items.filter((item) => item.evidence_type === "local_file") || [];
   const profileNameById = Object.fromEntries(
     profiles.map((profile) => [profile.id, profile.name]),
   ) as Record<string, string>;
-  const nextStep = getNextStepInfo(bundle, selectedTitle, reportPreview);
-  const filledFieldCount = editableKeys.filter(([key]) => (bundle?.current_fields[key] || "").trim()).length;
-  const readyTitleCount = bundle?.title_candidates.length || 0;
-  const hasExports = Boolean(bundle?.deliverable_bundle);
-  const hasPrimaryFields = primaryEditableKeys.every(([key]) => (bundle?.current_fields[key] || "").trim());
-  const activeSectionInfo = sectionMeta[activeSection];
-  const topRisk = bundle?.risks[0];
-  const statusText = error ? `错误：${error}` : message;
+  const hasDraftPrimaryFields = coreFieldKeys.every((key) => (fieldDraft[key] || bundle?.current_fields[key] || "").trim());
+  const canAccessTitles = Boolean(bundle) && hasDraftPrimaryFields;
+  const canAccessProposal = Boolean(bundle) && hasDraftPrimaryFields && Boolean(selectedTitle);
+  const displayReportTitle =
+    reportTitle ||
+    extractReportTitleFromPath(bundle?.deliverable_bundle?.report_docx_path) ||
+    extractReportTitleFromPath(bundle?.deliverable_bundle?.report_markdown_path) ||
+    privacySafeReportTitle(
+      selectedTitle?.title || "",
+      bundle?.current_fields.company_name || fieldDraft.company_name || "",
+      bundle?.current_fields.confidentiality_notes || fieldDraft.confidentiality_notes || "",
+    ) ||
+      "先在推荐选题里选定一个题目";
 
-  const loadWorkspace = async (workspaceId: string) => {
+  useEffect(() => {
+    const handlePointerDown = (event: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
+        setIsExportMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, []);
+
+  function applyActionResponse(result: ActionResponse) {
+    if (result.workspace) {
+      setBundle(result.workspace);
+    }
+    if (result.report?.report_markdown) {
+      setReportPreview(result.report.report_markdown);
+    }
+    if (result.report?.report_title) {
+      setReportTitle(result.report.report_title);
+    }
+    if (result.deliverables?.report?.report_markdown) {
+      setReportPreview(result.deliverables.report.report_markdown);
+    }
+    if (result.deliverables?.report?.report_title) {
+      setReportTitle(result.deliverables.report.report_title);
+    }
+  }
+
+  async function downloadArtifact(workspaceId: string, artifactName: DownloadArtifact, filename: string) {
+    const response = await fetch(`${API_BASE}/api/workspaces/${workspaceId}/download/${artifactName}`);
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.detail || "下载失败");
+    }
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  }
+
+  const loadWorkspace = useCallback(async (workspaceId: string) => {
     try {
       setError("");
       const data = await apiFetch<WorkspaceBundle>(`/api/workspaces/${workspaceId}`);
+      const selectedTitleCandidate = data.title_candidates.find((item) => item.selected);
+      let storedReportPreview = "";
+      const nextReportTitle =
+        extractReportTitleFromPath(data.deliverable_bundle?.report_docx_path) ||
+        extractReportTitleFromPath(data.deliverable_bundle?.report_markdown_path);
+      if (data.deliverable_bundle?.report_markdown_path) {
+        try {
+          storedReportPreview = await fetchArtifactText(data.workspace.id, "report_md");
+        } catch {
+          storedReportPreview = "";
+        }
+      }
+
       setBundle(data);
       const nextDraft: Record<string, string> = {};
       editableKeys.forEach(([key]) => {
-        nextDraft[key] = data.current_fields[key] || "";
+        nextDraft[key] = sanitizedDraftValue(key, data.current_fields[key] || "");
       });
       setFieldDraft(nextDraft);
       setInterviewDraft(data.interview_session?.answers || {});
-      setReportPreview("");
-      setActiveSection(getNextStepInfo(data, data.title_candidates.find((item) => item.selected), "").section);
-      setMessage(`已加载 ${data.workspace.name}，可以继续按当前建议推进。`);
+      setReportPreview(storedReportPreview);
+      setReportTitle(nextReportTitle);
+      setIsExportMenuOpen(false);
+      setActiveSection(
+        normalizeSection(getNextStepInfo(data, data.title_candidates.find((item) => item.selected), storedReportPreview).section),
+      );
+      setMessage(
+        selectedTitleCandidate && !storedReportPreview && !data.deliverable_bundle
+          ? `已加载 ${data.workspace.name}，正在后台恢复开题报告。`
+          : `已加载 ${data.workspace.name}，可以继续按当前建议推进。`,
+      );
+
+      if (selectedTitleCandidate && !storedReportPreview && !data.deliverable_bundle) {
+        void (async () => {
+          try {
+            setRunningAction("generate-report");
+            const generated = await apiFetch<ActionResponse>(`/api/workspaces/${data.workspace.id}/report/generate`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({}),
+            });
+            applyActionResponse(generated);
+            setMessage(`已加载 ${data.workspace.name}，并自动恢复开题报告。`);
+          } catch (fetchError) {
+            setError(`已加载 ${data.workspace.name}，但开题报告未恢复：${toErrorMessage(fetchError)}`);
+            setMessage(`已加载 ${data.workspace.name}。`);
+          } finally {
+            setRunningAction((current) => (current === "generate-report" ? null : current));
+          }
+        })();
+      }
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : "加载工作区失败");
     }
-  };
+  }, []);
 
   useEffect(() => {
     void (async () => {
@@ -375,7 +798,7 @@ export function WorkspaceApp() {
         setError(fetchError instanceof Error ? fetchError.message : "初始化失败");
       }
     })();
-  }, []);
+  }, [loadWorkspace]);
 
   async function createWorkspace(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -391,11 +814,13 @@ export function WorkspaceApp() {
       setMessage("项目已创建。先补真实问题和可用材料，再让研策开始收敛题目。");
       const nextDraft: Record<string, string> = {};
       editableKeys.forEach(([key]) => {
-        nextDraft[key] = data.current_fields[key] || "";
+        nextDraft[key] = sanitizedDraftValue(key, data.current_fields[key] || "");
       });
       setFieldDraft(nextDraft);
       setInterviewDraft({});
       setReportPreview("");
+      setReportTitle("");
+      setIsExportMenuOpen(false);
       setActiveSection("background");
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : "创建工作区失败");
@@ -403,42 +828,102 @@ export function WorkspaceApp() {
   }
 
   async function persistFields() {
-    if (!bundle) return;
+    if (!bundle) return false;
     try {
       setError("");
-      const values = editableKeys
-        .map(([key]) => ({ key, value: fieldDraft[key] || "", confirmed: true }))
-        .filter((item) => item.value.trim());
+      const values = editableKeys.map(([key]) => ({ key, value: fieldDraft[key] || "", confirmed: true }));
       const data = await apiFetch<WorkspaceBundle>(`/api/workspaces/${bundle.workspace.id}/fields`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ values }),
       });
       setBundle(data);
-      setMessage("基本信息已保存，研策会自动补全学校、导师和单位的公开信息。");
+      const importedLinks = await importPendingLinks(data.workspace.id);
+      setMessage(
+        importedLinks
+          ? "基本信息已保存，补充链接也已纳入后续选题参考。"
+          : "基本信息已保存，研策会自动补全学校、导师和单位的公开信息。",
+      );
+      return true;
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : "保存字段失败");
+      return false;
     }
   }
 
-  async function uploadFiles(target: "files" | "citations", fileList: FileList | null) {
+  async function goToTitleRecommendation() {
+    if (!hasDraftPrimaryFields) {
+      setError("请先补全学校名称、导师姓名、学生姓名和学号，再进入推荐选题。");
+      return;
+    }
+    try {
+      setIsAdvancingToTitles(true);
+      const saved = await persistFields();
+      if (!saved) return;
+      await runAction("recommend");
+    } finally {
+      setIsAdvancingToTitles(false);
+    }
+  }
+
+  async function uploadFiles(fileList: FileList | null) {
     if (!bundle || !fileList?.length) return;
     try {
       setError("");
       const formData = new FormData();
       Array.from(fileList).forEach((file) => formData.append("files", file));
-      const endpoint =
-        target === "files"
-          ? `/api/workspaces/${bundle.workspace.id}/files/upload`
-          : `/api/workspaces/${bundle.workspace.id}/citations/upload`;
-      const result = await apiFetch<{ workspace: WorkspaceBundle }>(endpoint, {
-        method: "POST",
-        body: formData,
-      });
+      const result = await apiFetch<{ workspace: WorkspaceBundle }>(
+        `/api/workspaces/${bundle.workspace.id}/files/upload`,
+        {
+          method: "POST",
+          body: formData,
+        },
+      );
       setBundle(result.workspace);
-      setMessage(target === "files" ? "资料已导入并分类。" : "文献已导入，系统已尝试补全元数据。");
+      setMessage(`已上传 ${fileList.length} 个文件，资料会自动归档并作为后续选题参考。`);
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : "上传失败");
+    }
+  }
+
+  async function deleteUploadedFile(evidenceId: string, title: string) {
+    if (!bundle) return;
+    const accepted = window.confirm(`确认删除“${title}”？删除后该文件将不再参与后续推荐选题和开题生成。`);
+    if (!accepted) return;
+    try {
+      setError("");
+      setDeletingFileId(evidenceId);
+      const result = await apiFetch<DeleteUploadedFileResponse>(
+        `/api/workspaces/${bundle.workspace.id}/files/${evidenceId}`,
+        { method: "DELETE" },
+      );
+      setBundle(result.workspace);
+      setMessage(`已删除 ${result.title}。`);
+    } catch (fetchError) {
+      setError(fetchError instanceof Error ? fetchError.message : "删除文件失败");
+    } finally {
+      setDeletingFileId(null);
+    }
+  }
+
+  async function importPendingLinks(workspaceId: string) {
+    const urls = linkDraft
+      .split(/\n+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    const uniqueUrls = Array.from(new Set(urls));
+    if (!uniqueUrls.length) return false;
+    try {
+      const result = await apiFetch<{ workspace: WorkspaceBundle }>(`/api/workspaces/${workspaceId}/links/import`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ urls: uniqueUrls }),
+      });
+      setBundle(result.workspace);
+      setLinkDraft("");
+      return true;
+    } catch (fetchError) {
+      throw new Error(fetchError instanceof Error ? fetchError.message : "导入链接失败");
     }
   }
 
@@ -463,6 +948,8 @@ export function WorkspaceApp() {
           setFieldDraft({});
           setInterviewDraft({});
           setReportPreview("");
+          setReportTitle("");
+          setIsExportMenuOpen(false);
           setMessage(`已删除 ${result.name}，当前没有工作区。`);
         }
       } else {
@@ -475,11 +962,9 @@ export function WorkspaceApp() {
     }
   }
 
-  async function runAction(
-    action: "interview" | "recommend" | "generate-report" | "freeze-deliverables",
-  ) {
+  async function runAction(action: WorkspaceAction) {
     if (!bundle) return;
-    const actionMap: Record<typeof action, string> = {
+    const actionMap: Record<WorkspaceAction, string> = {
       interview: `/api/workspaces/${bundle.workspace.id}/interview/generate`,
       recommend: `/api/workspaces/${bundle.workspace.id}/titles/recommend`,
       "generate-report": `/api/workspaces/${bundle.workspace.id}/report/generate`,
@@ -487,6 +972,10 @@ export function WorkspaceApp() {
     };
     try {
       setError("");
+      setRunningAction(action);
+      if (action === "interview" || action === "recommend") {
+        await importPendingLinks(bundle.workspace.id);
+      }
       const result = await apiFetch<ActionResponse>(actionMap[action], {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -495,31 +984,65 @@ export function WorkspaceApp() {
             ? JSON.stringify({})
             : undefined,
       });
-      if (result.workspace) {
-        setBundle(result.workspace);
-      }
-      if (result.report?.report_markdown) {
-        setReportPreview(result.report.report_markdown);
-      }
-      if (result.deliverables?.report?.report_markdown) {
-        setReportPreview(result.deliverables.report.report_markdown);
-      }
-      const nextSections: Record<typeof action, WorkspaceSection> = {
+      applyActionResponse(result);
+      const nextSections: Record<WorkspaceAction, WorkspaceSection> = {
         interview: "titles",
         recommend: "titles",
         "generate-report": "proposal",
-        "freeze-deliverables": "materials",
+        "freeze-deliverables": "proposal",
       };
-      setActiveSection(nextSections[action]);
-      const messages: Record<typeof action, string> = {
+      setActiveSection(normalizeSection(nextSections[action]));
+      const messages: Record<WorkspaceAction, string> = {
         interview: "访谈问题已生成。回答越具体，题目越不会虚。",
-        recommend: "候选题已重算。建议先冻结一个题目再写正文。",
+        recommend: "候选题已生成，直接比较后选定一个题目即可。",
         "generate-report": "正文草稿已生成。先读逻辑和引用，不要急着导出。",
         "freeze-deliverables": "冻结版导出已生成。现在可以直接下载。",
       };
       setMessage(messages[action]);
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : "执行动作失败");
+    } finally {
+      setRunningAction(null);
+    }
+  }
+
+  async function exportDeliverable(format: ExportFormat) {
+    if (!bundle || !selectedTitle) return;
+    const workspaceId = bundle.workspace.id;
+    const artifactName: Record<ExportFormat, DownloadArtifact> = {
+      word: "report_docx",
+      ppt: "deck_pptx",
+    };
+    const formatLabel: Record<ExportFormat, string> = {
+      word: "Word",
+      ppt: "PPT",
+    };
+    try {
+      setError("");
+      setIsExportMenuOpen(false);
+      setExportingFormat(format);
+      let nextBundle: WorkspaceBundle | null = bundle;
+      if (!bundle.deliverable_bundle) {
+        setRunningAction("freeze-deliverables");
+        const result = await apiFetch<ActionResponse>(`/api/workspaces/${workspaceId}/deliverables/freeze`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        applyActionResponse(result);
+        nextBundle = result.workspace || bundle;
+      }
+      await downloadArtifact(
+        workspaceId,
+        artifactName[format],
+        preferredArtifactFilename(nextBundle, artifactName[format], displayReportTitle),
+      );
+      setMessage(`${formatLabel[format]} 导出已开始。`);
+    } catch (fetchError) {
+      setError(fetchError instanceof Error ? fetchError.message : `${formatLabel[format]} 导出失败`);
+    } finally {
+      setRunningAction((current) => (current === "freeze-deliverables" ? null : current));
+      setExportingFormat(null);
     }
   }
 
@@ -527,6 +1050,7 @@ export function WorkspaceApp() {
     if (!bundle || !bundle.interview_session) return;
     try {
       setError("");
+      await importPendingLinks(bundle.workspace.id);
       const result = await apiFetch<{ workspace: WorkspaceBundle }>(
         `/api/workspaces/${bundle.workspace.id}/interview/answer`,
         {
@@ -536,35 +1060,50 @@ export function WorkspaceApp() {
         },
       );
       setBundle(result.workspace);
-      setActiveSection("titles");
-      setMessage("访谈结论已回填。现在可以重新生成候选题。");
+      await runAction("recommend");
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : "提交访谈失败");
     }
   }
 
   async function selectTitle(titleId: string) {
-    if (!bundle) return;
-    startTransition(() => {
-      void (async () => {
-        try {
-          setError("");
-          const data = await apiFetch<WorkspaceBundle>(
-            `/api/workspaces/${bundle.workspace.id}/titles/select`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ title_id: titleId }),
-            },
-          );
-          setBundle(data);
-          setActiveSection("proposal");
-          setMessage("题目已冻结。接下来正文和交付件都会围绕这一题展开。");
-        } catch (fetchError) {
-          setError(fetchError instanceof Error ? fetchError.message : "冻结题目失败");
-        }
-      })();
-    });
+    if (!bundle || isSelectingTitle) return;
+    let selectionApplied = false;
+    try {
+      setError("");
+      setIsSelectingTitle(true);
+      setIsExportMenuOpen(false);
+      const data = await apiFetch<WorkspaceBundle>(`/api/workspaces/${bundle.workspace.id}/titles/select`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title_id: titleId }),
+      });
+      selectionApplied = true;
+      setBundle(data);
+      setReportPreview("");
+      setReportTitle("");
+      setActiveSection("proposal");
+      setRunningAction("generate-report");
+      const result = await apiFetch<ActionResponse>(`/api/workspaces/${data.workspace.id}/report/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      applyActionResponse(result);
+      setActiveSection("proposal");
+      setMessage("题目已选定，开题报告已按当前资料自动生成。");
+    } catch (fetchError) {
+      const fallbackMessage = fetchError instanceof Error ? fetchError.message : "冻结题目失败";
+      if (selectionApplied) {
+        setError(`题目已选定，但报告生成失败：${fallbackMessage}`);
+        setMessage("题目已选定，但报告还没有成功生成。你可以在报告区重新生成。");
+      } else {
+        setError(fallbackMessage);
+      }
+    } finally {
+      setRunningAction((current) => (current === "generate-report" ? null : current));
+      setIsSelectingTitle(false);
+    }
   }
 
   return (
@@ -573,75 +1112,25 @@ export function WorkspaceApp() {
       <div className="pointer-events-none absolute inset-x-0 top-0 h-[24rem] bg-[linear-gradient(180deg,rgba(14,30,47,0.92),rgba(14,30,47,0.08))]" />
 
       <div className="relative mx-auto max-w-[1760px]">
-        <header className="reveal overflow-hidden rounded-[40px] border border-[var(--line-strong)] bg-[linear-gradient(145deg,rgba(12,26,42,0.98),rgba(22,44,66,0.88))] px-5 py-6 text-[var(--canvas)] shadow-[var(--shadow-strong)] md:px-8 md:py-8">
+        <header className="reveal overflow-hidden rounded-[40px] border border-[var(--line-strong)] bg-[linear-gradient(145deg,rgba(12,26,42,0.98),rgba(22,44,66,0.88))] px-5 py-5 text-[var(--canvas)] shadow-[var(--shadow-strong)] md:px-8 md:py-6 xl:px-10 xl:py-7">
           <div className="studio-glow pointer-events-none absolute inset-0" />
-          <div className="relative grid gap-8 xl:grid-cols-[minmax(0,1.2fr)_360px]">
-            <div className="max-w-4xl">
-              <div className="flex flex-wrap items-center gap-3">
-                <span className="rounded-full border border-white/12 bg-white/6 px-3 py-1 text-[10px] uppercase tracking-[0.34em] text-[rgba(244,239,230,0.76)]">
-                  {BRAND.zhName} {BRAND.enName}
-                </span>
-                <span className="rounded-full border border-[rgba(240,133,52,0.16)] bg-[rgba(240,133,52,0.1)] px-3 py-1 text-[10px] uppercase tracking-[0.26em] text-[rgba(255,203,154,0.92)]">
-                  {BRAND.zhPosition}
-                </span>
+          <div className="relative flex items-center gap-5 md:gap-6">
+            <HeroLogo />
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
+                <h1 className="font-serif text-[2.2rem] leading-none tracking-[-0.04em] text-[var(--canvas)] md:text-[2.8rem]">
+                  {BRAND.enName}
+                </h1>
+                <p className="pb-1 font-serif text-[1.7rem] leading-none tracking-[-0.03em] text-[rgba(244,239,230,0.9)] md:text-[2.1rem]">
+                  {BRAND.zhName}
+                </p>
               </div>
-              <p className="mt-5 text-[11px] uppercase tracking-[0.36em] text-[rgba(244,239,230,0.58)]">
+              <p className="mt-3 text-[1rem] leading-7 text-[rgba(244,239,230,0.82)] md:text-[1.15rem]">
+                {BRAND.zhPosition}
+              </p>
+              <p className="mt-3 text-[11px] uppercase tracking-[0.36em] text-[rgba(244,239,230,0.54)]">
                 {BRAND.enPosition}
               </p>
-              <h1 className="mt-5 max-w-4xl font-serif text-[2.15rem] leading-[1.04] tracking-[-0.04em] text-[var(--canvas)] md:text-[3.2rem] xl:text-[4.15rem]">
-                {BRAND.slogan}
-                <span className="text-[rgba(255,209,169,0.98)]"> 用四个清晰区块完成选题、论证与答辩。</span>
-              </h1>
-              <p className="mt-4 max-w-2xl text-sm leading-7 text-[rgba(244,239,230,0.76)] md:text-base">
-                你只需要先说清导师、单位、岗位和真实问题，研策会自动补全公开资料，必要时追问关键细节，再生成可核对的开题报告、PPT 和讲稿。
-              </p>
-              <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-                <div className="sm:w-[220px]">
-                  <PrimaryButton onClick={() => setActiveSection(nextStep.section)} accent>
-                    前往{sectionMeta[nextStep.section].label}
-                  </PrimaryButton>
-                </div>
-                <div className="sm:w-[220px]">
-                  <SecondaryButton onClick={() => setActiveSection("background")}>
-                    返回项目背景
-                  </SecondaryButton>
-                </div>
-              </div>
-              <div className="mt-6 grid gap-3 md:grid-cols-3">
-                <HeaderStat
-                  label="当前项目"
-                  value={bundle?.workspace.name || "未创建"}
-                  hint={bundle?.profile.name || "请选择学校规则"}
-                />
-                <HeaderStat
-                  label="当前题目"
-                  value={selectedTitle?.title || "尚未冻结"}
-                  hint={selectedTitle ? "可以继续生成正文" : "先完成题目收敛"}
-                />
-                <HeaderStat
-                  label="下一步"
-                  value={nextStep.title}
-                  hint={nextStep.body}
-                />
-              </div>
-            </div>
-            <div className="rounded-[32px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.08),rgba(255,255,255,0.03))] p-5 backdrop-blur md:p-6">
-              <p className="text-xs uppercase tracking-[0.28em] text-[rgba(244,239,230,0.62)]">
-                当前建议
-              </p>
-              <h2 className="mt-3 font-serif text-3xl text-[var(--canvas)]">{nextStep.title}</h2>
-              <p className="mt-3 text-sm leading-7 text-[rgba(244,239,230,0.74)]">{nextStep.body}</p>
-              <div className="mt-6 space-y-3">
-                <SignalCard
-                  title={bundle ? bundle.workspace.name : "尚未创建项目"}
-                  body={bundle ? `${bundle.profile.name} · ${activeSectionInfo.label}` : "先创建一个项目，四个区块才会开始工作。"}
-                />
-                <SignalCard
-                  title={topRisk ? prettifyCopy(topRisk.title) : "当前没有关键提醒"}
-                  body={topRisk ? prettifyCopy(topRisk.body) : "系统校验默认下沉，只在需要你处理时抬到这里。"}
-                  tone={topRisk ? getRiskTone(topRisk.priority) : "muted"}
-                />
-              </div>
             </div>
           </div>
         </header>
@@ -660,18 +1149,23 @@ export function WorkspaceApp() {
                   />
                 </label>
                 <label className="grid gap-2">
-                  <span className="text-xs uppercase tracking-[0.22em] text-[var(--ink-soft)]">学校规则</span>
-                  <select
-                    value={profileId}
-                    onChange={(event) => setProfileId(event.target.value)}
-                    className="rounded-[18px] border border-[rgba(19,33,51,0.12)] bg-[rgba(255,255,255,0.72)] px-4 py-3 text-sm text-[var(--foreground)] outline-none transition focus:border-[rgba(240,133,52,0.42)]"
-                  >
-                    {profiles.map((profile) => (
-                      <option key={profile.id} value={profile.id} className="text-slate-900">
-                        {profile.name}
-                      </option>
-                    ))}
-                  </select>
+                  <span className="text-xs uppercase tracking-[0.22em] text-[var(--ink-soft)]">学校</span>
+                  <div className="relative">
+                    <select
+                      value={profileId}
+                      onChange={(event) => setProfileId(event.target.value)}
+                      className="w-full appearance-none rounded-[18px] border border-[rgba(19,33,51,0.12)] bg-[rgba(255,255,255,0.72)] px-4 py-3 pr-12 text-sm text-[var(--foreground)] outline-none transition focus:border-[rgba(240,133,52,0.42)]"
+                    >
+                      {profiles.map((profile) => (
+                        <option key={profile.id} value={profile.id} className="text-slate-900">
+                          {profile.name}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="pointer-events-none absolute inset-y-0 right-4 flex items-center justify-center text-[rgba(19,33,51,0.72)]">
+                      <span className="h-2.5 w-2.5 rotate-45 border-b-[1.5px] border-r-[1.5px] border-current" />
+                    </span>
+                  </div>
                 </label>
                 <button
                   type="submit"
@@ -682,544 +1176,352 @@ export function WorkspaceApp() {
               </form>
             </RailPanel>
 
-            <RailPanel eyebrow="当前项目" title={bundle?.workspace.name || "尚未选择"}>
-              <div className="space-y-4">
-                <StageRow
-                  label="学校规则"
-                  value={bundle?.profile.name || "未设置"}
-                  hint="项目背景、推荐题目、开题报告和答辩材料都围绕这套规则展开"
-                />
-                <StageRow
-                  label="当前题目"
-                  value={selectedTitle?.title || "尚未冻结"}
-                  hint={selectedTitle ? "后续报告和答辩材料都会锁定围绕这一题" : "先去推荐题目里选定一个题目"}
-                />
-                <StageRow
-                  label="当前步骤"
-                  value={nextStep.title}
-                  hint={nextStep.body}
-                />
-              </div>
-            </RailPanel>
-
             <RailPanel eyebrow="项目" title="项目列表">
               <div className="space-y-2">
                 {workspaces.length ? (
                   workspaces.map((workspace) => (
                     <div
                       key={workspace.id}
-                      className={`flex items-start gap-2 rounded-[18px] px-2 py-2 transition ${
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => void loadWorkspace(workspace.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          void loadWorkspace(workspace.id);
+                        }
+                      }}
+                      className={`flex cursor-pointer items-center gap-3 rounded-[18px] px-3 py-3 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(240,133,52,0.4)] ${
                         bundle?.workspace.id === workspace.id
                           ? "bg-[rgba(240,133,52,0.1)]"
                           : "hover:bg-[rgba(17,30,46,0.04)]"
                       }`}
                     >
-                      <button
-                        type="button"
-                        onClick={() => void loadWorkspace(workspace.id)}
-                        className="min-w-0 flex-1 rounded-[14px] px-2 py-1 text-left"
-                      >
+                      <div className="min-w-0 flex-1 rounded-[14px] px-1 py-1 text-left">
                         <span className="line-clamp-2 block text-sm leading-6 text-[var(--foreground)]">
                           {workspace.name}
                         </span>
                         <span className="mt-1 block text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">
                           {profileNameById[workspace.school_profile] || workspace.school_profile}
                         </span>
-                      </button>
+                      </div>
                       <button
                         type="button"
                         aria-label={`删除 ${workspace.name}`}
                         title={`删除 ${workspace.name}`}
                         disabled={deletingWorkspaceId === workspace.id}
-                        onClick={() => void removeWorkspace(workspace.id, workspace.name)}
-                        className="shrink-0 rounded-full border border-[rgba(157,60,51,0.18)] bg-[rgba(157,60,51,0.08)] px-3 py-1.5 text-[11px] uppercase tracking-[0.16em] text-[var(--danger)] transition hover:bg-[rgba(157,60,51,0.14)] disabled:cursor-not-allowed disabled:opacity-50"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void removeWorkspace(workspace.id, workspace.name);
+                        }}
+                        className="shrink-0 self-center rounded-full border border-[rgba(157,60,51,0.18)] bg-[rgba(157,60,51,0.08)] px-3 py-1.5 text-[11px] uppercase tracking-[0.12em] text-[var(--danger)] transition hover:bg-[rgba(157,60,51,0.14)] disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {deletingWorkspaceId === workspace.id ? "删除中" : "删除"}
                       </button>
                     </div>
                   ))
-                ) : (
-                  <MutedBlock text="还没有项目。先在左上角创建一个项目。" />
-                )}
+                ) : null}
               </div>
             </RailPanel>
           </aside>
 
           <section className="reveal space-y-6">
-            <nav className="grid gap-3 rounded-[32px] border border-[var(--line-strong)] bg-[rgba(248,242,234,0.86)] p-3 shadow-[var(--shadow-soft)] md:grid-cols-4">
-              {(Object.keys(sectionMeta) as WorkspaceSection[]).map((section) => (
+            <p className="sr-only" aria-live="polite">
+              {error ? `错误：${error}` : message}
+            </p>
+            <nav className="grid gap-3 rounded-[32px] border border-[var(--line-strong)] bg-[rgba(248,242,234,0.86)] p-3 shadow-[var(--shadow-soft)] md:grid-cols-3">
+              {(["background", "titles", "proposal"] as WorkspaceSection[]).map((section) => (
                 <WorkspaceNavButton
                   key={section}
-                  active={activeSection === section}
+                  active={normalizeSection(activeSection) === section}
                   label={sectionMeta[section].label}
                   hint={sectionMeta[section].body}
+                  disabled={
+                    !bundle ||
+                    (section === "titles" && !canAccessTitles) ||
+                    (section === "proposal" && !canAccessProposal)
+                  }
                   onClick={() => setActiveSection(section)}
                 />
               ))}
             </nav>
 
-            <section className="rounded-[32px] border border-[var(--line-strong)] bg-[rgba(248,242,234,0.82)] p-5 shadow-[var(--shadow-soft)]">
-              <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-                <div>
-                  <p className="text-[10px] uppercase tracking-[0.28em] text-[var(--ink-soft)]">当前步骤</p>
-                  <h2 className="mt-2 font-serif text-[2.4rem] leading-tight text-[var(--foreground)]">
-                    {activeSectionInfo.title}
-                  </h2>
-                  <p className="mt-3 max-w-3xl text-sm leading-7 text-[var(--ink-soft)]">
-                    {activeSectionInfo.body}
-                  </p>
-                </div>
-                <div className="rounded-[26px] border border-[rgba(19,33,51,0.08)] bg-[rgba(255,255,255,0.7)] p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="font-medium text-[var(--foreground)]">系统状态</p>
-                    <TonePill tone={error ? "danger" : nextStep.tone}>{error ? "异常" : "正常"}</TonePill>
-                  </div>
-                  <p className="mt-3 text-sm leading-7 text-[var(--ink-soft)]">{statusText}</p>
-                </div>
-              </div>
-            </section>
-
-            {activeSection === "background" ? (
-              <PaperSection eyebrow="项目背景" title="把研究对象和资料边界说清楚">
-                <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
-                  <div>
-                    <SectionLead
-                      title="核心信息"
-                      body="这里先填真正决定题目质量的核心信息。研策会在保存后自动补全学校、导师和单位的公开信息。"
-                    />
-                    <div className="mt-6 grid gap-4 md:grid-cols-2">
-                      {primaryEditableKeys.map(([key, label, placeholder, mode]) => (
-                        <FieldEditor
-                          key={key}
-                          label={label}
-                          value={fieldDraft[key] || ""}
-                          placeholder={placeholder}
-                          multiline={mode === "multi"}
-                          onChange={(value) =>
-                            setFieldDraft((current) => ({
-                              ...current,
-                              [key]: value,
-                            }))
-                          }
-                        />
-                      ))}
-                    </div>
-
-                    <details className="mt-6 rounded-[24px] border border-[var(--line)] bg-[rgba(255,255,255,0.64)] p-4">
-                      <summary className="cursor-pointer list-none text-sm font-medium text-[var(--foreground)]">
-                        展开补充信息
-                      </summary>
-                      <p className="mt-2 text-sm leading-7 text-[var(--ink-soft)]">
-                        这些内容不是一开始必须填写，题目收敛或导出前再补也来得及。
-                      </p>
-                      <div className="mt-4 grid gap-4 md:grid-cols-2">
-                        {optionalEditableKeys.map(([key, label, placeholder, mode]) => (
-                          <FieldEditor
-                            key={key}
-                            label={label}
-                            value={fieldDraft[key] || ""}
-                            placeholder={placeholder}
-                            multiline={mode === "multi"}
-                            onChange={(value) =>
-                              setFieldDraft((current) => ({
-                                ...current,
-                                [key]: value,
-                              }))
-                            }
-                          />
-                        ))}
-                      </div>
-                    </details>
-                  </div>
-
-                  <div className="space-y-4">
-                    <ProgressTile
-                      label="背景完成度"
-                      value={bundle ? `${filledFieldCount}/${editableKeys.length}` : "未开始"}
-                      hint="先把研究对象说清，再进入题目比较"
-                    />
-                    <UploadStage
-                      title="导入项目资料"
-                      body="上传学校要求、已有草稿、内部材料或访谈纪要，系统会自动归档并作为事实层使用。"
-                      hint="支持 md / txt / docx / pdf"
-                      onChange={(files) => void uploadFiles("files", files)}
-                    />
-                    <UploadStage
-                      title="导入参考文献"
-                      body="优先导入 RIS、BibTeX 或 JSON，后续写综述时会直接使用这些真实条目。"
-                      hint="支持 ris / bib / json"
-                      onChange={(files) => void uploadFiles("citations", files)}
-                    />
-                    <div className="rounded-[24px] border border-[var(--line)] bg-[rgba(255,255,255,0.68)] p-4">
-                      <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
-                        <StageRow
-                          label="资料记录"
-                          value={String(bundle?.statistics.evidence_count || 0)}
-                          hint="已导入或已补全的资料条目"
-                        />
-                        <StageRow
-                          label="文献数量"
-                          value={String(bundle?.statistics.citation_count || 0)}
-                          hint="已进入项目空间的参考文献"
-                        />
-                        <StageRow
-                          label="已核验文献"
-                          value={String(bundle?.statistics.verified_citation_count || 0)}
-                          hint="能进入最终正文的真实引用"
-                        />
-                      </div>
-                    </div>
-                    <PrimaryButton onClick={() => void persistFields()} disabled={!bundle}>
-                      保存并自动补全
-                    </PrimaryButton>
-                  </div>
-                </div>
-
-                <details className="mt-6 group rounded-[24px] border border-[var(--line)] bg-[rgba(255,255,255,0.62)] p-4">
-                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
-                    <div>
-                      <p className="font-medium text-[var(--foreground)]">查看校验与依据</p>
-                      <p className="mt-1 text-sm leading-6 text-[var(--ink-soft)]">
-                        自动补全、风险提醒、字段冲突和资料清单默认下沉到这里。
-                      </p>
-                    </div>
-                    <span className="text-xs uppercase tracking-[0.22em] text-[var(--accent)] transition group-open:rotate-45">
-                      展开
-                    </span>
-                  </summary>
-
-                  <div className="mt-6 space-y-6">
-                    <div>
-                      <SectionLead
-                        title="系统提醒"
-                        body="只有真正会影响题目或正文质量的问题，才值得你在这里花时间看。"
-                        compact
-                      />
-                      <div className="mt-4 space-y-3">
-                        {bundle?.risks.length ? (
-                          bundle.risks.map((risk) => <RiskRow key={risk.id} risk={risk} />)
-                        ) : (
-                          <MutedBlock text="当前没有需要额外提醒的问题。" padded />
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="grid gap-6 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-                      <div>
-                        <SectionLead
-                          title="当前口径"
-                          body="用于核对同一字段有没有多个不同版本，避免后面写着写着跑偏。"
-                          compact
-                        />
-                        <div className="mt-4 overflow-hidden rounded-[26px] border border-[var(--line)] bg-[rgba(255,255,255,0.76)]">
-                          {bundle?.field_groups.length ? (
-                            bundle.field_groups.map((group, index) => (
-                              <LedgerRow
-                                key={group.key}
-                                title={getFieldLabel(group.key)}
-                                subtitle={group.current.value || "未设置"}
-                                meta={`${group.current.source_label} · ${group.current.source_grade}级来源`}
-                                status={group.has_conflict ? "conflict" : group.current.confirmed ? "confirmed" : "draft"}
-                                bordered={index !== bundle.field_groups.length - 1}
-                              />
-                            ))
-                          ) : (
-                            <MutedBlock text="保存字段或导入资料后，这里会显示当前口径和可能的冲突。" padded />
-                          )}
-                        </div>
-                      </div>
-
-                      <div>
-                        <SectionLead
-                          title="资料与文献"
-                          body="所有已导入和已补全的资料都会出现在这里，供你按需核对。"
-                          compact
-                        />
-                        <div className="mt-4 overflow-hidden rounded-[26px] border border-[var(--line)] bg-[rgba(255,255,255,0.76)]">
-                          {bundle?.evidence_items.length ? (
-                            bundle.evidence_items.map((item, index) => (
-                              <EvidenceLedgerRow
-                                key={item.id}
-                                item={item}
-                                bordered={index !== bundle.evidence_items.length - 1}
-                              />
-                            ))
-                          ) : (
-                            <MutedBlock text="还没有资料记录。保存基本信息或导入文件后，系统会自动补全并更新这里。" padded />
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </details>
-              </PaperSection>
+            {error ? (
+              <StatusBanner tone="danger" text={error} />
+            ) : message ? (
+              <StatusBanner tone="muted" text={message} />
             ) : null}
 
-            {activeSection === "titles" ? (
-              <PaperSection eyebrow="推荐题目" title="先问清，再比较">
-                <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
-                  <div>
-                    {bundle?.interview_session ? (
-                      <div className="rounded-[26px] border border-[var(--line)] bg-[rgba(255,248,240,0.72)] p-5">
-                        <div className="flex items-center justify-between gap-3">
-                          <SectionLead
-                            title="访谈收敛"
-                            body="这些问题只服务于题目收敛，不需要你先理解系统内部逻辑。"
-                            compact
-                          />
-                          <TonePill tone={bundle.interview_session.status === "completed" ? "success" : "warning"}>
-                            {bundle.interview_session.status === "completed" ? "已完成" : "待回答"}
-                          </TonePill>
-                        </div>
-                        <ul className="mt-4 space-y-3 text-sm leading-7 text-[var(--ink-soft)]">
-                          {bundle.interview_session.trigger_reasons.map((reason) => (
-                            <li key={reason} className="flex gap-3">
-                              <span className="mt-[9px] h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
-                              <span>{prettifyCopy(reason)}</span>
-                            </li>
+            {bundle ? (
+              <>
+                {normalizeSection(activeSection) === "background" ? (
+                  <PaperSection eyebrow="基础信息" title="先填导师侧、学生侧和上传资料" hideHeader>
+                    <div className="space-y-6">
+                      <div className="rounded-[26px] border border-[var(--line)] bg-[rgba(255,255,255,0.72)] p-5">
+                        <SectionLead
+                          title="导师信息"
+                          body="学校名称和导师姓名是起点。系统会基于它们自动联网搜索学校写作要求和导师研究方向。"
+                          compact
+                        />
+                        <div className="mt-4 grid gap-4 md:grid-cols-2">
+                          {mentorEditableKeys.map(([key, label, placeholder, mode]) => (
+                            <FieldEditor
+                              key={key}
+                              label={label}
+                              value={fieldDraft[key] || ""}
+                              placeholder={placeholder}
+                              multiline={mode === "multi"}
+                              required
+                              onChange={(value) =>
+                                setFieldDraft((current) => ({
+                                  ...current,
+                                  [key]: value,
+                                }))
+                              }
+                            />
                           ))}
-                        </ul>
-
-                        <div className="mt-5 space-y-5">
-                          {bundle.interview_session.questions.map((question) => (
-                            <label key={question.key} className="grid gap-2">
-                              <span className="text-sm font-medium text-[var(--foreground)]">{question.question}</span>
-                              <textarea
-                                rows={3}
-                                value={interviewDraft[question.key] || ""}
-                                onChange={(event) =>
-                                  setInterviewDraft((current) => ({
-                                    ...current,
-                                    [question.key]: event.target.value,
-                                  }))
-                                }
-                                placeholder={question.placeholder}
-                                className="min-h-[106px] rounded-[22px] border border-[var(--line)] bg-[rgba(255,253,249,0.82)] px-4 py-3 text-sm leading-7 outline-none transition focus:border-[var(--accent)]"
-                              />
-                            </label>
-                          ))}
-                        </div>
-                        <div className="mt-5 flex justify-end">
-                          <PrimaryButton onClick={() => void submitInterviewAnswers()}>
-                            保存访谈回答
-                          </PrimaryButton>
                         </div>
                       </div>
-                    ) : (
-                      <MutedBlock text="如果你觉得题目还不够聚焦，可以先触发收敛访谈，让系统补问几个关键问题。" padded />
-                    )}
 
-                    <div className="mt-6">
+                      <div className="rounded-[26px] border border-[var(--line)] bg-[rgba(255,255,255,0.72)] p-5">
+                        <SectionLead
+                          title="学生信息"
+                          body="学生姓名和学号会进入最终导出材料，也用于项目归档。"
+                          compact
+                        />
+                        <div className="mt-4 grid gap-4 md:grid-cols-2">
+                          {studentEditableKeys.map(([key, label, placeholder, mode]) => (
+                            <FieldEditor
+                              key={key}
+                              label={label}
+                              value={fieldDraft[key] || ""}
+                              placeholder={placeholder}
+                              multiline={mode === "multi"}
+                              required
+                              onChange={(value) =>
+                                setFieldDraft((current) => ({
+                                  ...current,
+                                  [key]: value,
+                                }))
+                              }
+                            />
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="rounded-[26px] border border-[var(--line)] bg-[rgba(255,255,255,0.72)] p-5">
+                        <SectionLead
+                          title="补充信息"
+                          body="这些信息不是必填，但会让推荐题目更贴近你的工作场景。"
+                          compact
+                        />
+                        <div className="mt-4 grid gap-4 md:grid-cols-2">
+                          {optionalEditableKeys.map(([key, label, placeholder, mode]) => (
+                            <FieldEditor
+                              key={key}
+                              label={label}
+                              value={fieldDraft[key] || ""}
+                              placeholder={placeholder}
+                              multiline={mode === "multi"}
+                              onChange={(value) =>
+                                setFieldDraft((current) => ({
+                                  ...current,
+                                  [key]: value,
+                                }))
+                              }
+                            />
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="rounded-[28px] border border-[var(--line)] bg-[linear-gradient(180deg,rgba(255,255,255,0.86),rgba(250,245,238,0.78))] p-5 md:p-6">
+                        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.9fr)]">
+                          <div className="h-full">
+                            <UploadStage
+                              title="参考资料"
+                              body="上传写作要求、内部材料和项目资料，后续选题和开题生成会优先参考。"
+                              hint="支持 md、txt、doc、docx、ppt、pptx、pdf"
+                              accept=".md,.txt,.doc,.docx,.ppt,.pptx,.pdf,image/*"
+                              onChange={(files) => void uploadFiles(files)}
+                              files={uploadedLocalFiles}
+                              removingId={deletingFileId}
+                              onRemove={(evidenceId, title) => void deleteUploadedFile(evidenceId, title)}
+                            />
+                          </div>
+
+                          <div className="flex h-full flex-col rounded-[24px] border border-[var(--line)] bg-[rgba(255,255,255,0.74)] p-4 md:p-5">
+                            <SectionLead
+                              title="参考链接"
+                              body="学校要求网页、导师主页、单位官网和项目介绍页都可以直接贴进来。每行一个链接，后续推荐选题会自动参考。"
+                              compact
+                            />
+                            <textarea
+                              rows={5}
+                              value={linkDraft}
+                              onChange={(event) => setLinkDraft(event.target.value)}
+                              placeholder={"https://...\nhttps://..."}
+                              className="mt-4 min-h-[220px] w-full flex-1 rounded-[20px] border border-[rgba(19,33,51,0.08)] bg-[rgba(255,255,255,0.86)] px-4 py-3 text-sm leading-7 text-[var(--foreground)] outline-none placeholder:text-[rgba(19,33,51,0.36)]"
+                            />
+                          </div>
+                        </div>
+                        <div className="mt-6 flex justify-end">
+                          <div className="w-full sm:w-[220px]">
+                            <PrimaryButton
+                              onClick={() => void goToTitleRecommendation()}
+                              disabled={!bundle || !hasDraftPrimaryFields || isAdvancingToTitles || runningAction === "recommend"}
+                            >
+                              {isAdvancingToTitles || runningAction === "recommend" ? "正在生成候选题" : "下一步"}
+                            </PrimaryButton>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                  </PaperSection>
+                ) : null}
+
+                {normalizeSection(activeSection) === "titles" ? (
+                  <PaperSection eyebrow="推荐选题" title="比较候选题并确定一个题目" showDivider={false}>
+                    <div className="space-y-6">
+                      {bundle?.interview_session ? (
+                        <div className="rounded-[26px] border border-[var(--line)] bg-[rgba(255,248,240,0.72)] p-5">
+                          <div className="flex items-center justify-between gap-3">
+                            <SectionLead
+                              title="补充访谈"
+                              body="如果上一轮候选题还不够准，就把这些关键问题回答具体，系统会自动重算候选题。"
+                              compact
+                            />
+                            <TonePill tone={bundle.interview_session.status === "completed" ? "success" : "warning"}>
+                              {bundle.interview_session.status === "completed" ? "已完成" : "待回答"}
+                            </TonePill>
+                          </div>
+                          <ul className="mt-4 space-y-3 text-sm leading-7 text-[var(--ink-soft)]">
+                            {bundle.interview_session.trigger_reasons.map((reason) => (
+                              <li key={reason} className="flex gap-3">
+                                <span className="mt-[9px] h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
+                                <span>{prettifyCopy(reason)}</span>
+                              </li>
+                            ))}
+                          </ul>
+
+                          <div className="mt-5 space-y-5">
+                            {bundle.interview_session.questions.map((question) => (
+                              <label key={question.key} className="grid gap-2">
+                                <span className="text-sm font-medium text-[var(--foreground)]">{question.question}</span>
+                                <textarea
+                                  rows={3}
+                                  value={interviewDraft[question.key] || ""}
+                                  onChange={(event) =>
+                                    setInterviewDraft((current) => ({
+                                      ...current,
+                                      [question.key]: event.target.value,
+                                    }))
+                                  }
+                                  placeholder={question.placeholder}
+                                  className="min-h-[106px] rounded-[22px] border border-[var(--line)] bg-[rgba(255,253,249,0.82)] px-4 py-3 text-sm leading-7 outline-none transition focus:border-[var(--accent)]"
+                                />
+                              </label>
+                            ))}
+                          </div>
+                          <div className="mt-5 flex justify-end">
+                            <div className="w-full sm:w-[220px]">
+                              <PrimaryButton
+                                onClick={() => void submitInterviewAnswers()}
+                                disabled={runningAction === "recommend"}
+                              >
+                                {runningAction === "recommend" ? "正在更新候选题" : "保存回答并更新候选题"}
+                              </PrimaryButton>
+                            </div>
+                          </div>
+                        </div>
+                      ) : null}
+
                       {bundle?.title_candidates.length ? (
                         <div className="grid gap-4 xl:grid-cols-2">
                           {bundle.title_candidates.map((candidate) => (
                             <TitleBoardRow
                               key={candidate.id}
                               candidate={candidate}
+                              disabled={isSelectingTitle || runningAction === "generate-report"}
                               onSelect={() => void selectTitle(candidate.id)}
                             />
                           ))}
                         </div>
                       ) : (
-                        <MutedBlock text="还没有推荐题目。先补资料，或直接点“生成推荐题目”。" padded />
+                        <MutedBlock
+                          text={
+                            runningAction === "recommend"
+                              ? "正在根据当前填写的信息、资料和公开链接生成候选题，请稍候。"
+                              : "当前还没有候选题，补充更多资料后重新生成即可。"
+                          }
+                          padded
+                        />
                       )}
                     </div>
-                  </div>
+                  </PaperSection>
+                ) : null}
 
-                  <div className="space-y-4">
-                    <StageRow
-                      label="候选题数量"
-                      value={String(readyTitleCount)}
-                      hint="建议先比较 3 到 5 个题目，再冻结一个题目"
-                    />
-                    <StageRow
-                      label="已冻结题目"
-                      value={selectedTitle ? "1 个" : "未冻结"}
-                      hint={selectedTitle ? selectedTitle.title : "冻结后才能稳定生成报告和材料"}
-                    />
-                    <SecondaryButton onClick={() => void runAction("interview")} disabled={!bundle || !hasPrimaryFields}>
-                      触发收敛访谈
-                    </SecondaryButton>
-                    <PrimaryButton onClick={() => void runAction("recommend")} disabled={!bundle || !hasPrimaryFields}>
-                      生成推荐题目
-                    </PrimaryButton>
-                  </div>
-                </div>
-              </PaperSection>
-            ) : null}
-
-            {activeSection === "proposal" ? (
-              <PaperSection eyebrow="开题报告" title={selectedTitle?.title || "先从推荐题目里确定一个题目"}>
-                <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
-                  <div className="rounded-[28px] border border-[var(--line)] bg-[linear-gradient(180deg,rgba(255,255,255,0.86),rgba(252,247,239,0.8))] p-5">
-                    <div className="flex flex-wrap items-start justify-between gap-4">
-                      <div>
-                        <p className="text-xs uppercase tracking-[0.26em] text-[var(--ink-soft)]">报告预览</p>
-                        <h3 className="mt-2 font-serif text-3xl leading-tight text-[var(--foreground)]">
-                          {selectedTitle?.title || "先去推荐题目里选定一个题目"}
-                        </h3>
-                      </div>
-                      {isPending ? <TonePill tone="warning">更新中</TonePill> : null}
-                    </div>
-                    {reportPreview ? (
-                      <pre className="paper-preview mt-5 max-h-[760px] overflow-auto whitespace-pre-wrap rounded-[24px] border border-[rgba(19,33,51,0.08)] bg-[rgba(255,255,255,0.82)] px-5 py-5 text-sm leading-7 text-[var(--foreground)]">
-                        {reportPreview}
-                      </pre>
-                    ) : (
-                      <MutedBlock text="这里会显示开题报告草稿。先确定题目，再点击生成报告。" padded />
-                    )}
-                  </div>
-
-                  <div className="space-y-4">
-                    <div className="rounded-[28px] border border-[var(--line)] bg-[rgba(249,244,236,0.88)] p-5">
-                      <SectionLead
-                        title="报告动作"
-                        body="先看结构和论证方向，再决定是否进入答辩材料导出。"
-                        compact
+                {normalizeSection(activeSection) === "proposal" ? (
+                  <PaperSection
+                    eyebrow="开题生成"
+                    title=""
+                    actions={
+                      <ExportMenu
+                        menuRef={exportMenuRef}
+                        open={isExportMenuOpen}
+                        disabled={!selectedTitle || isSelectingTitle || runningAction === "generate-report" || exportingFormat !== null}
+                        isExporting={exportingFormat !== null || runningAction === "freeze-deliverables"}
+                        onToggle={() => setIsExportMenuOpen((current) => !current)}
+                        onExport={(format) => void exportDeliverable(format)}
                       />
-                      <div className="mt-5">
-                        <PrimaryButton onClick={() => void runAction("generate-report")} disabled={!selectedTitle}>
-                          生成开题报告
-                        </PrimaryButton>
-                      </div>
-                    </div>
-
-                    <div className="rounded-[28px] border border-[var(--line)] bg-[rgba(255,255,255,0.76)] p-5">
-                      <SectionLead
-                        title="学校要求"
-                        body="这部分是当前学校规则要求的报告结构，正文生成会围绕它来组织。"
-                        compact
-                      />
-                      <div className="mt-4 space-y-2">
-                        {bundle?.profile.required_sections.length ? (
-                          bundle.profile.required_sections.map((section) => (
-                            <div
-                              key={section}
-                              className="rounded-[18px] border border-[rgba(19,33,51,0.08)] bg-[rgba(255,255,255,0.68)] px-4 py-3 text-sm text-[var(--foreground)]"
-                            >
-                              {section}
+                    }
+                  >
+                    <div className="overflow-hidden rounded-[30px] border border-[rgba(19,33,51,0.1)] bg-[linear-gradient(180deg,rgba(255,255,255,0.92),rgba(252,247,240,0.88))] shadow-[inset_0_1px_0_rgba(255,255,255,0.5)]">
+                      {reportPreview ? (
+                        <ReportDocument
+                          markdown={reportPreview}
+                          fallbackTitle={displayReportTitle}
+                        />
+                      ) : (
+                        <div className="px-5 py-7 md:px-8 md:py-9">
+                          <MutedBlock
+                            text={
+                              selectedTitle
+                                ? runningAction === "generate-report"
+                                  ? "正在整理开题报告正文，请稍候。"
+                                  : "当前还没有可展示的开题报告。你可以重新生成一次，或先回到上一步更换题目。"
+                                : "请先在推荐选题阶段选择一个题目，这里会直接展示生成后的开题报告。"
+                            }
+                            padded
+                          />
+                          {selectedTitle && runningAction !== "generate-report" ? (
+                            <div className="mt-5 flex justify-end">
+                              <button
+                                type="button"
+                                onClick={() => void runAction("generate-report")}
+                                className="inline-flex items-center justify-center rounded-full border border-[rgba(19,33,51,0.12)] bg-[rgba(255,255,255,0.82)] px-4 py-2.5 text-sm font-medium text-[var(--foreground)] transition hover:border-[rgba(240,133,52,0.34)] hover:text-[var(--accent)]"
+                              >
+                                重新生成报告
+                              </button>
                             </div>
-                          ))
-                        ) : (
-                          <MutedBlock text="当前还没有加载到学校结构要求。" />
-                        )}
-                      </div>
+                          ) : null}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                </div>
-              </PaperSection>
-            ) : null}
-
-            {activeSection === "materials" ? (
-              <PaperSection eyebrow="答辩材料" title="统一导出你真正会用到的成果">
-                <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
-                  <div className="space-y-4">
-                    <StageRow
-                      label="当前题目"
-                      value={selectedTitle?.title || "尚未冻结"}
-                      hint="答辩材料只会围绕冻结题目生成"
-                    />
-                    <StageRow
-                      label="导出状态"
-                      value={hasExports ? "已冻结" : "未导出"}
-                      hint={hasExports ? "可以直接下载和预览" : "先生成报告，再冻结导出"}
-                    />
-                    <PrimaryButton
-                      onClick={() => void runAction("freeze-deliverables")}
-                      disabled={!selectedTitle}
-                      accent
-                    >
-                      冻结并生成答辩材料
-                    </PrimaryButton>
-                  </div>
-
-                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                    <DeliverableCard
-                      label="开题报告 Markdown"
-                      hint="便于快速审阅与版本对比"
-                      ready={Boolean(bundle?.deliverable_bundle)}
-                      href={bundle ? `${API_BASE}/api/workspaces/${bundle.workspace.id}/download/report_md` : undefined}
-                    />
-                    <DeliverableCard
-                      label="开题报告 Word"
-                      hint="正式提交和编辑时使用"
-                      ready={Boolean(bundle?.deliverable_bundle)}
-                      href={bundle ? `${API_BASE}/api/workspaces/${bundle.workspace.id}/download/report_docx` : undefined}
-                    />
-                    <DeliverableCard
-                      label="答辩 PPT"
-                      hint="从冻结版报告自动派生"
-                      ready={Boolean(bundle?.deliverable_bundle)}
-                      href={bundle ? `${API_BASE}/api/workspaces/${bundle.workspace.id}/download/deck_pptx` : undefined}
-                    />
-                    <DeliverableCard
-                      label="讲稿 Markdown"
-                      hint="适合先看逻辑和口语化节奏"
-                      ready={Boolean(bundle?.deliverable_bundle)}
-                      href={bundle ? `${API_BASE}/api/workspaces/${bundle.workspace.id}/download/notes_md` : undefined}
-                    />
-                    <DeliverableCard
-                      label="讲稿 Word"
-                      hint="适合打印和二次修订"
-                      ready={Boolean(bundle?.deliverable_bundle)}
-                      href={bundle ? `${API_BASE}/api/workspaces/${bundle.workspace.id}/download/notes_docx` : undefined}
-                    />
-                    <DeliverableCard
-                      label="来源快照"
-                      hint="用于回看引用和证据依据"
-                      ready={Boolean(bundle?.deliverable_bundle)}
-                      href={bundle ? `${API_BASE}/api/workspaces/${bundle.workspace.id}/download/snapshot` : undefined}
-                    />
-                  </div>
-                </div>
-              </PaperSection>
-            ) : null}
+                  </PaperSection>
+                ) : null}
+              </>
+            ) : (
+              <div className="flex min-h-[420px] items-center justify-center px-6">
+                <p className="text-center text-base leading-8 text-[var(--ink-soft)]">
+                  还没有项目，先在左上角创建一个项目。
+                </p>
+              </div>
+            )}
           </section>
         </div>
       </div>
     </main>
-  );
-}
-
-function HeaderStat({
-  label,
-  value,
-  hint,
-}: {
-  label: string;
-  value: string;
-  hint: string;
-}) {
-  return (
-    <div className="rounded-[22px] border border-white/10 bg-[rgba(255,255,255,0.06)] px-4 py-4">
-      <p className="text-[10px] uppercase tracking-[0.24em] text-[rgba(244,239,230,0.56)]">{label}</p>
-      <p className="mt-2 line-clamp-3 text-sm leading-6 text-[var(--canvas)]">{value}</p>
-      <p className="mt-2 text-xs text-[rgba(244,239,230,0.58)]">{hint}</p>
-    </div>
-  );
-}
-
-function SignalCard({
-  title,
-  body,
-  tone = "muted",
-}: {
-  title: string;
-  body: string;
-  tone?: "success" | "warning" | "danger" | "muted";
-}) {
-  const styles: Record<typeof tone, string> = {
-    success: "border-[rgba(37,109,82,0.18)] bg-[rgba(37,109,82,0.08)]",
-    warning: "border-[rgba(153,93,29,0.18)] bg-[rgba(153,93,29,0.08)]",
-    danger: "border-[rgba(157,60,51,0.18)] bg-[rgba(157,60,51,0.08)]",
-    muted: "border-white/10 bg-[rgba(255,255,255,0.05)]",
-  };
-
-  return (
-    <div className={`rounded-[22px] border px-4 py-4 ${styles[tone]}`}>
-      <p className="text-sm font-medium text-[var(--canvas)]">{title}</p>
-      <p className="mt-2 text-sm leading-6 text-[rgba(244,239,230,0.7)]">{body}</p>
-    </div>
   );
 }
 
@@ -1245,21 +1547,89 @@ function PaperSection({
   eyebrow,
   title,
   children,
+  hideHeader = false,
+  showDivider = true,
+  actions,
 }: {
   eyebrow: string;
   title: string;
   children: ReactNode;
+  hideHeader?: boolean;
+  showDivider?: boolean;
+  actions?: ReactNode;
 }) {
   return (
     <section className="rounded-[34px] border border-[var(--line-strong)] bg-[var(--paper)] p-5 shadow-[var(--shadow-soft)] backdrop-blur md:p-6">
-      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-[rgba(19,33,51,0.08)] pb-4">
-        <div>
-          <p className="text-[10px] uppercase tracking-[0.28em] text-[var(--ink-soft)]">{eyebrow}</p>
-          <h2 className="mt-2 font-serif text-[2.15rem] leading-tight text-[var(--foreground)]">{title}</h2>
+      {!hideHeader ? (
+        <div className={`flex flex-wrap items-end justify-between gap-4 ${showDivider ? "border-b border-[rgba(19,33,51,0.08)] pb-4" : ""}`}>
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.28em] text-[var(--ink-soft)]">{eyebrow}</p>
+            {title ? <h2 className="mt-2 font-serif text-[2.15rem] leading-tight text-[var(--foreground)]">{title}</h2> : null}
+          </div>
+          {actions ? <div className="shrink-0">{actions}</div> : null}
         </div>
-      </div>
-      <div className="mt-6">{children}</div>
+      ) : null}
+      <div className={hideHeader ? undefined : showDivider ? "mt-6" : "mt-4"}>{children}</div>
     </section>
+  );
+}
+
+function StatusBanner({
+  tone,
+  text,
+}: {
+  tone: "danger" | "muted";
+  text: string;
+}) {
+  return (
+    <div
+      className={`rounded-[22px] border px-4 py-3 text-sm leading-7 whitespace-pre-line ${
+        tone === "danger"
+          ? "border-[rgba(157,60,51,0.18)] bg-[rgba(157,60,51,0.08)] text-[var(--danger)]"
+          : "border-[rgba(19,33,51,0.08)] bg-[rgba(255,255,255,0.58)] text-[var(--ink-soft)]"
+      }`}
+    >
+      {text}
+    </div>
+  );
+}
+
+function HeroLogo() {
+  return (
+    <div className="relative flex h-[72px] w-[72px] shrink-0 items-center justify-center rounded-full border border-[rgba(233,202,162,0.26)] bg-[radial-gradient(circle_at_34%_28%,rgba(250,235,210,0.14),rgba(22,44,70,0.96)_58%,rgba(8,20,34,1))] shadow-[0_0_0_8px_rgba(255,255,255,0.03),0_18px_36px_rgba(7,17,28,0.28)] md:h-[86px] md:w-[86px]">
+      <div className="absolute inset-[5px] rounded-full border border-[rgba(236,209,173,0.22)] bg-[radial-gradient(circle_at_30%_28%,rgba(255,255,255,0.06),transparent_54%)] md:inset-[6px]" />
+      <div className="absolute inset-[11px] rounded-full border border-[rgba(236,209,173,0.18)] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.03)] md:inset-[13px]" />
+
+      <div className="absolute top-[8px] h-[4px] w-[4px] rounded-full bg-[rgba(244,226,196,0.88)] md:top-[10px]" />
+      <div className="absolute bottom-[8px] h-[4px] w-[4px] rounded-full bg-[rgba(244,226,196,0.72)] md:bottom-[10px]" />
+      <div className="absolute left-[8px] h-[4px] w-[4px] rounded-full bg-[rgba(244,226,196,0.72)] md:left-[10px]" />
+      <div className="absolute right-[8px] h-[4px] w-[4px] rounded-full bg-[rgba(244,226,196,0.72)] md:right-[10px]" />
+
+      <div className="absolute left-[13px] flex flex-col gap-[3px] md:left-[16px] md:gap-[4px]">
+        <span className="h-[7px] w-[4px] rounded-full bg-[linear-gradient(180deg,rgba(248,227,192,0.9),rgba(212,154,83,0.82))] rotate-[-34deg] md:h-[8px]" />
+        <span className="ml-[2px] h-[7px] w-[4px] rounded-full bg-[linear-gradient(180deg,rgba(248,227,192,0.9),rgba(212,154,83,0.82))] rotate-[-18deg] md:h-[8px]" />
+        <span className="ml-[3px] h-[7px] w-[4px] rounded-full bg-[linear-gradient(180deg,rgba(248,227,192,0.9),rgba(212,154,83,0.82))] rotate-[2deg] md:h-[8px]" />
+        <span className="ml-[2px] h-[7px] w-[4px] rounded-full bg-[linear-gradient(180deg,rgba(248,227,192,0.9),rgba(212,154,83,0.82))] rotate-[18deg] md:h-[8px]" />
+      </div>
+      <div className="absolute right-[13px] flex flex-col gap-[3px] md:right-[16px] md:gap-[4px]">
+        <span className="mr-[2px] h-[7px] w-[4px] rounded-full bg-[linear-gradient(180deg,rgba(248,227,192,0.9),rgba(212,154,83,0.82))] rotate-[34deg] md:h-[8px]" />
+        <span className="h-[7px] w-[4px] rounded-full bg-[linear-gradient(180deg,rgba(248,227,192,0.9),rgba(212,154,83,0.82))] rotate-[18deg] md:h-[8px]" />
+        <span className="mr-[1px] h-[7px] w-[4px] rounded-full bg-[linear-gradient(180deg,rgba(248,227,192,0.9),rgba(212,154,83,0.82))] rotate-[0deg] md:h-[8px]" />
+        <span className="h-[7px] w-[4px] rounded-full bg-[linear-gradient(180deg,rgba(248,227,192,0.9),rgba(212,154,83,0.82))] rotate-[-18deg] md:h-[8px]" />
+      </div>
+
+      <div className="absolute inset-[21px] rounded-full bg-[radial-gradient(circle_at_50%_32%,rgba(252,238,214,0.14),rgba(17,35,56,0.88)_70%)] md:inset-[25px]" />
+      <div className="absolute top-[18px] h-[10px] w-px bg-[linear-gradient(180deg,rgba(249,229,194,0.96),rgba(249,229,194,0))] md:top-[22px] md:h-[12px]" />
+      <div className="absolute h-[30px] w-px bg-[linear-gradient(180deg,rgba(255,255,255,0.08),rgba(244,225,193,0.88),rgba(255,255,255,0.08))] md:h-[36px]" />
+      <div className="absolute top-[22px] h-[5px] w-[5px] rounded-full bg-[rgba(248,229,197,0.96)] shadow-[0_0_10px_rgba(248,229,197,0.2)] md:top-[27px]" />
+
+      <div className="absolute top-[33px] flex items-start gap-[2px] md:top-[39px]">
+        <div className="h-[11px] w-[10px] rounded-bl-[9px] rounded-tl-[3px] rounded-tr-[7px] border border-[rgba(239,214,181,0.82)] bg-[linear-gradient(180deg,rgba(253,242,222,0.9),rgba(222,178,118,0.88))] md:h-[13px] md:w-[12px]" />
+        <div className="h-[11px] w-[10px] rounded-br-[9px] rounded-tl-[7px] rounded-tr-[3px] border border-[rgba(239,214,181,0.82)] bg-[linear-gradient(180deg,rgba(253,242,222,0.9),rgba(222,178,118,0.88))] md:h-[13px] md:w-[12px]" />
+      </div>
+      <div className="absolute top-[34px] h-[12px] w-px bg-[rgba(18,37,58,0.9)] md:top-[40px] md:h-[14px]" />
+      <div className="absolute bottom-[18px] h-px w-[20px] bg-[linear-gradient(90deg,rgba(255,255,255,0),rgba(240,214,182,0.76),rgba(255,255,255,0))] md:bottom-[22px] md:w-[24px]" />
+    </div>
   );
 }
 
@@ -1287,17 +1657,22 @@ function FieldEditor({
   value,
   placeholder,
   multiline,
+  required = false,
   onChange,
 }: {
   label: string;
   value: string;
   placeholder: string;
   multiline: boolean;
+  required?: boolean;
   onChange: (value: string) => void;
 }) {
   return (
     <label className="grid gap-2 rounded-[24px] border border-[rgba(19,33,51,0.08)] bg-[rgba(255,255,255,0.72)] p-4 transition hover:border-[rgba(19,33,51,0.16)]">
-      <span className="text-xs uppercase tracking-[0.24em] text-[var(--ink-soft)]">{label}</span>
+      <span className="flex items-center gap-2 text-xs uppercase tracking-[0.24em] text-[var(--ink-soft)]">
+        <span>{label}</span>
+        {required ? <span className="text-[11px] tracking-normal text-[var(--danger)]">* 必填</span> : null}
+      </span>
       {multiline ? (
         <textarea
           rows={4}
@@ -1322,138 +1697,123 @@ function UploadStage({
   title,
   body,
   hint,
+  accept,
   onChange,
+  files,
+  removingId,
+  onRemove,
 }: {
   title: string;
   body: string;
   hint: string;
+  accept?: string;
   onChange: (files: FileList | null) => void;
+  files: EvidenceItem[];
+  removingId: string | null;
+  onRemove: (evidenceId: string, title: string) => void;
 }) {
-  return (
-    <label className="group relative cursor-pointer overflow-hidden rounded-[28px] border border-dashed border-[rgba(19,33,51,0.18)] bg-[linear-gradient(180deg,rgba(255,255,255,0.8),rgba(247,241,233,0.74))] p-5 transition hover:border-[var(--accent)]">
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-[linear-gradient(180deg,rgba(240,133,52,0.08),transparent)] opacity-0 transition group-hover:opacity-100" />
-      <div className="relative">
-        <p className="font-serif text-2xl text-[var(--foreground)]">{title}</p>
-        <p className="mt-2 text-sm leading-7 text-[var(--ink-soft)]">{body}</p>
-        <div className="mt-4 flex items-center justify-between gap-4">
-          <span className="rounded-full bg-[rgba(240,133,52,0.1)] px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-[var(--accent)]">
-            选择文件
-          </span>
-          <span className="text-xs text-[var(--ink-soft)]">{hint}</span>
-        </div>
-      </div>
-      <input type="file" multiple className="hidden" onChange={(event) => onChange(event.target.files)} />
-    </label>
-  );
-}
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const dragDepthRef = useRef(0);
+  const [isDragActive, setIsDragActive] = useState(false);
 
-function LedgerRow({
-  title,
-  subtitle,
-  meta,
-  status,
-  bordered,
-}: {
-  title: string;
-  subtitle: string;
-  meta: string;
-  status: "conflict" | "confirmed" | "draft";
-  bordered: boolean;
-}) {
+  const handleDragEnter = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    dragDepthRef.current += 1;
+    setIsDragActive(true);
+  };
+
+  const handleDragLeave = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) {
+      setIsDragActive(false);
+    }
+  };
+
+  const handleDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    dragDepthRef.current = 0;
+    setIsDragActive(false);
+    onChange(event.dataTransfer.files);
+  };
+
   return (
-    <div className={`flex gap-4 px-4 py-4 ${bordered ? "border-b border-[rgba(19,33,51,0.08)]" : ""}`}>
+    <div
+      onDragEnter={handleDragEnter}
+      onDragOver={(event) => event.preventDefault()}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      className={`group relative flex h-full min-h-[320px] overflow-hidden rounded-[26px] border border-dashed bg-[linear-gradient(180deg,rgba(255,255,255,0.8),rgba(247,241,233,0.74))] p-4 md:p-5 transition ${
+        isDragActive
+          ? "border-[var(--accent)] shadow-[0_20px_40px_rgba(240,133,52,0.12)]"
+          : "border-[rgba(19,33,51,0.18)] hover:border-[var(--accent)]"
+      }`}
+    >
       <div
-        className={`mt-1 h-3 w-3 rounded-full ${
-          status === "conflict"
-            ? "bg-[var(--danger)]"
-            : status === "confirmed"
-              ? "bg-[var(--success)]"
-              : "bg-[rgba(19,33,51,0.22)]"
+        className={`pointer-events-none absolute inset-x-0 top-0 h-16 bg-[linear-gradient(180deg,rgba(240,133,52,0.08),transparent)] transition ${
+          isDragActive ? "opacity-100" : "opacity-0 group-hover:opacity-100"
         }`}
       />
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <p className="font-medium text-[var(--foreground)]">{title}</p>
-          <TonePill tone={status === "conflict" ? "danger" : status === "confirmed" ? "success" : "muted"}>
-            {status === "conflict" ? "冲突" : status === "confirmed" ? "确认" : "待确认"}
-          </TonePill>
+      <div className="relative flex h-full flex-1 flex-col">
+        <p className="font-serif text-2xl text-[var(--foreground)]">{title}</p>
+        <p className="mt-2 text-sm leading-7 text-[var(--ink-soft)]">{body}</p>
+        <div className="mt-auto pt-6">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => inputRef.current?.click()}
+                className="rounded-full bg-[rgba(240,133,52,0.1)] px-4 py-2 text-[11px] uppercase tracking-[0.2em] text-[var(--accent)] transition hover:bg-[rgba(240,133,52,0.16)]"
+              >
+                选择文件
+              </button>
+            </div>
+            <span className="text-xs leading-6 text-[var(--ink-soft)]">{hint}</span>
+          </div>
         </div>
-        <p className="mt-1 text-sm leading-7 text-[var(--foreground)]">{subtitle}</p>
-        <p className="mt-1 text-xs leading-6 text-[var(--ink-soft)]">{meta}</p>
-      </div>
-    </div>
-  );
-}
-
-function EvidenceLedgerRow({
-  item,
-  bordered,
-}: {
-  item: EvidenceItem;
-  bordered: boolean;
-}) {
-  return (
-    <div className={`flex gap-4 px-4 py-4 ${bordered ? "border-b border-[rgba(19,33,51,0.08)]" : ""}`}>
-      <div className="mt-1 w-[92px] shrink-0">
-        <TonePill tone={item.grade === "A" ? "success" : item.grade === "B" ? "warning" : "muted"}>
-          {item.grade}级
-        </TonePill>
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <p className="font-medium text-[var(--foreground)]">{item.title}</p>
-          <TonePill tone={item.status === "verified" ? "success" : item.status === "blocked" ? "danger" : "warning"}>
-            {getEvidenceStatusLabel(item.status)}
-          </TonePill>
-        </div>
-        <p className="mt-1 text-sm leading-7 text-[var(--ink-soft)]">{item.summary}</p>
-        <div className="mt-2 flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.16em] text-[var(--ink-soft)]">
-          <span>{getEvidenceTypeLabel(item.evidence_type)}</span>
-          <span>·</span>
-          <span>{item.source_label}</span>
-        </div>
-        {item.source_uri ? (
-          <p className="mt-2 truncate text-xs leading-6 text-[var(--ink-soft)]">{item.source_uri}</p>
+        {files.length ? (
+          <div className="mt-5 border-t border-[rgba(19,33,51,0.08)] pt-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <p className="text-xs uppercase tracking-[0.22em] text-[var(--ink-soft)]">已上传文件</p>
+              <span className="text-xs text-[var(--ink-soft)]">{files.length} 个</span>
+            </div>
+            <div className="space-y-3">
+              {files.map((file) => (
+                <div
+                  key={file.id}
+                  className="flex items-center justify-between gap-3 rounded-[20px] border border-[rgba(19,33,51,0.08)] bg-[rgba(255,255,255,0.7)] px-4 py-3"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-[var(--foreground)]">{file.title}</p>
+                    <p className="mt-1 text-xs leading-6 text-[var(--ink-soft)]">
+                      {file.source_label || "本地上传"}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onRemove(file.id, file.title)}
+                    disabled={removingId === file.id}
+                    className="shrink-0 rounded-full border border-[rgba(157,60,51,0.18)] px-3 py-1.5 text-xs font-medium text-[var(--danger)] transition hover:bg-[rgba(157,60,51,0.06)] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {removingId === file.id ? "删除中" : "删除"}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
         ) : null}
       </div>
-    </div>
-  );
-}
-
-function ProgressTile({
-  label,
-  value,
-  hint,
-}: {
-  label: string;
-  value: string;
-  hint: string;
-}) {
-  return (
-    <div className="rounded-[22px] border border-[rgba(19,33,51,0.08)] bg-[rgba(255,255,255,0.66)] px-4 py-4">
-      <p className="text-[10px] uppercase tracking-[0.22em] text-[var(--ink-soft)]">{label}</p>
-      <p className="mt-2 text-2xl text-[var(--foreground)]">{value}</p>
-      <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">{hint}</p>
-    </div>
-  );
-}
-
-function StageRow({
-  label,
-  value,
-  hint,
-}: {
-  label: string;
-  value: string;
-  hint: string;
-}) {
-  return (
-    <div className="rounded-[20px] border border-[rgba(19,33,51,0.08)] bg-[rgba(255,255,255,0.62)] px-4 py-4">
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-sm font-medium text-[var(--foreground)]">{label}</span>
-        <span className="text-sm text-[var(--foreground-soft)]">{value}</span>
-      </div>
-      <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">{hint}</p>
+      <input
+        ref={inputRef}
+        type="file"
+        multiple
+        accept={accept}
+        className="hidden"
+        onChange={(event) => {
+          onChange(event.target.files);
+          event.currentTarget.value = "";
+        }}
+      />
     </div>
   );
 }
@@ -1462,22 +1822,25 @@ function WorkspaceNavButton({
   active,
   label,
   hint,
+  disabled = false,
   onClick,
 }: {
   active: boolean;
   label: string;
   hint: string;
+  disabled?: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={onClick}
       className={`rounded-[24px] border px-4 py-4 text-left transition ${
         active
           ? "border-[rgba(240,133,52,0.38)] bg-[rgba(240,133,52,0.12)] shadow-[0_18px_36px_rgba(240,133,52,0.08)]"
           : "border-[rgba(19,33,51,0.08)] bg-[rgba(255,255,255,0.68)] hover:border-[rgba(19,33,51,0.16)]"
-      }`}
+      } ${disabled ? "cursor-not-allowed opacity-55 hover:border-[rgba(19,33,51,0.08)]" : ""}`}
     >
       <p className="font-medium text-[var(--foreground)]">{label}</p>
       <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">{hint}</p>
@@ -1488,13 +1851,15 @@ function WorkspaceNavButton({
 function TitleBoardRow({
   candidate,
   onSelect,
+  disabled = false,
 }: {
   candidate: TitleCandidate;
   onSelect: () => void;
+  disabled?: boolean;
 }) {
   return (
     <div
-      className={`w-full rounded-[24px] border px-4 py-4 text-left transition ${
+      className={`flex h-full w-full flex-col rounded-[24px] border px-4 py-4 text-left transition ${
         candidate.selected
           ? "border-[rgba(240,133,52,0.42)] bg-[rgba(240,133,52,0.1)] shadow-[0_18px_32px_rgba(240,133,52,0.08)]"
           : "border-[rgba(19,33,51,0.08)] bg-[rgba(255,255,255,0.7)] hover:border-[rgba(19,33,51,0.18)]"
@@ -1502,95 +1867,36 @@ function TitleBoardRow({
     >
       <div className="flex items-start justify-between gap-3">
         <p className="font-serif text-xl leading-8 text-[var(--foreground)]">{candidate.title}</p>
-        <div className="shrink-0 text-right">
-          <p className="font-mono text-2xl text-[var(--foreground)]">{candidate.total_score}</p>
-          <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--ink-soft)]">推荐度</p>
-        </div>
-      </div>
-      <p className="mt-3 text-sm leading-7 text-[var(--ink-soft)]">{candidate.recommendation}</p>
-      {candidate.reasons.length ? (
-        <ul className="mt-4 space-y-2 text-sm leading-6 text-[var(--foreground-soft)]">
-          {candidate.reasons.slice(0, 2).map((reason) => (
-            <li key={reason} className="flex gap-3">
-              <span className="mt-2 h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
-              <span>{prettifyCopy(reason)}</span>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      {candidate.caution ? (
-        <p className="mt-4 rounded-[18px] bg-[rgba(157,60,51,0.06)] px-3 py-3 text-sm leading-6 text-[var(--danger)]">
-          需要注意：{prettifyCopy(candidate.caution)}
-        </p>
-      ) : null}
-      <details className="mt-4 rounded-[18px] border border-[rgba(19,33,51,0.08)] bg-[rgba(255,255,255,0.52)] px-3 py-3">
-        <summary className="cursor-pointer list-none text-xs uppercase tracking-[0.2em] text-[var(--ink-soft)]">
-          查看匹配度细节
-        </summary>
-        <div className="mt-4 grid grid-cols-5 gap-2">
-          <MiniScore label={scoreLabels[0]} value={candidate.school_fit} />
-          <MiniScore label={scoreLabels[1]} value={candidate.mentor_fit} />
-          <MiniScore label={scoreLabels[2]} value={candidate.role_fit} />
-          <MiniScore label={scoreLabels[3]} value={candidate.evidence_fit} />
-          <MiniScore label={scoreLabels[4]} value={candidate.confidentiality_fit} />
-        </div>
-        {candidate.risk_tags.length ? (
-          <div className="mt-4 flex flex-wrap gap-2">
-            {candidate.risk_tags.map((tag) => (
-              <TonePill key={tag} tone={tag.includes("不建议") ? "danger" : "warning"}>
-                {prettifyCopy(tag)}
-              </TonePill>
-            ))}
-          </div>
-        ) : null}
-      </details>
-      <div className="mt-4">
-        {candidate.selected ? (
-          <TonePill tone="success">已选定这个题目</TonePill>
-        ) : (
-          <SecondaryButton onClick={onSelect}>选择这个题目</SecondaryButton>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function MiniScore({
-  label,
-  value,
-}: {
-  label: string;
-  value: number;
-}) {
-  return (
-    <div className="rounded-[14px] bg-[rgba(19,33,51,0.06)] px-2 py-2">
-      <div className="h-1.5 rounded-full bg-[rgba(19,33,51,0.08)]">
         <div
-          className="h-1.5 rounded-full bg-[linear-gradient(90deg,var(--accent),var(--foreground))] transition-all duration-500"
-          style={{ width: `${Math.max(10, Math.min(100, value))}%` }}
-        />
-      </div>
-      <p className="mt-2 text-center text-[10px] uppercase tracking-[0.14em] text-[var(--ink-soft)]">{label}</p>
-      <p className="mt-2 text-center font-mono text-[11px] text-[var(--foreground)]">{value.toFixed(0)}</p>
-    </div>
-  );
-}
-
-function RiskRow({
-  risk,
-}: {
-  risk: { id: string; title: string; body: string; priority: number };
-}) {
-  return (
-    <div className="rounded-[22px] border border-[rgba(19,33,51,0.08)] bg-[rgba(255,255,255,0.68)] px-4 py-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="font-medium text-[var(--foreground)]">{prettifyCopy(risk.title)}</p>
-          <p className="mt-2 text-sm leading-7 text-[var(--ink-soft)]">{prettifyCopy(risk.body)}</p>
+          className={`shrink-0 rounded-[20px] border px-3 py-2 text-right shadow-[inset_0_1px_0_rgba(255,255,255,0.42)] ${
+            candidate.selected
+              ? "border-[rgba(240,133,52,0.18)] bg-[linear-gradient(180deg,rgba(255,248,240,0.98),rgba(248,232,214,0.94))]"
+              : "border-[rgba(19,33,51,0.08)] bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(245,240,232,0.92))]"
+          }`}
+        >
+          <p className="font-mono text-2xl leading-none text-[var(--foreground)]">{candidate.total_score}</p>
+          <p className="mt-2 inline-flex rounded-full bg-[rgba(240,133,52,0.12)] px-2 py-1 text-[10px] font-medium tracking-[0.18em] text-[var(--ink-soft)]">
+            推荐度
+          </p>
         </div>
-        <TonePill tone={getRiskTone(risk.priority)}>
-          {getRiskPriorityLabel(risk.priority)} · P{risk.priority}
-        </TonePill>
+      </div>
+      {candidate.recommendation ? (
+        <p className="mt-5 flex-1 text-base leading-8 text-[var(--foreground-soft)]">{prettifyCopy(candidate.recommendation)}</p>
+      ) : null}
+      <div className="mt-6">
+        {candidate.selected ? (
+          <button
+            type="button"
+            disabled
+            className="inline-flex min-h-[58px] w-full cursor-default items-center justify-center rounded-[20px] border border-[rgba(37,109,82,0.18)] bg-[linear-gradient(180deg,rgba(37,109,82,0.16),rgba(37,109,82,0.1))] px-4 py-3 text-sm font-semibold text-[var(--success)] shadow-[inset_0_1px_0_rgba(255,255,255,0.24)]"
+          >
+            当前已选题目
+          </button>
+        ) : (
+          <PrimaryButton onClick={onSelect} accent disabled={disabled}>
+            {disabled ? "正在生成报告" : "选择这个题目"}
+          </PrimaryButton>
+        )}
       </div>
     </div>
   );
@@ -1628,7 +1934,7 @@ function PrimaryButton({
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className={`inline-flex w-full items-center justify-center rounded-full px-4 py-3 text-sm font-semibold transition ${
+      className={`inline-flex w-full items-center justify-center rounded-full px-4 py-3 text-sm font-semibold transition active:scale-[0.985] ${
         accent
           ? "bg-[var(--accent)] text-[var(--canvas)] hover:bg-[var(--accent-strong)]"
           : "bg-[var(--foreground)] text-[var(--canvas)] hover:bg-[var(--foreground-soft)]"
@@ -1639,67 +1945,142 @@ function PrimaryButton({
   );
 }
 
-function SecondaryButton({
-  children,
-  onClick,
+function ExportMenu({
+  menuRef,
+  open,
   disabled,
+  isExporting,
+  onToggle,
+  onExport,
 }: {
-  children: ReactNode;
-  onClick: () => void;
-  disabled?: boolean;
+  menuRef: RefObject<HTMLDivElement | null>;
+  open: boolean;
+  disabled: boolean;
+  isExporting: boolean;
+  onToggle: () => void;
+  onExport: (format: ExportFormat) => void;
 }) {
   return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      className="inline-flex w-full items-center justify-center rounded-full border border-[rgba(19,33,51,0.12)] bg-[rgba(255,255,255,0.72)] px-4 py-3 text-sm font-semibold text-[var(--foreground)] transition hover:border-[rgba(240,133,52,0.36)] hover:bg-[rgba(255,255,255,0.9)] disabled:cursor-not-allowed disabled:opacity-50"
-    >
-      {children}
-    </button>
-  );
-}
-
-function ArtifactLink({ href, label }: { href: string; label: string }) {
-  return (
-    <a
-      href={href}
-      className="rounded-[18px] border border-[rgba(19,33,51,0.08)] bg-[rgba(255,255,255,0.68)] px-4 py-3 text-sm text-[var(--foreground)] transition hover:border-[rgba(240,133,52,0.36)] hover:bg-[rgba(255,255,255,0.86)]"
-      target="_blank"
-      rel="noreferrer"
-    >
-      {label}
-    </a>
-  );
-}
-
-function DeliverableCard({
-  label,
-  hint,
-  ready,
-  href,
-}: {
-  label: string;
-  hint: string;
-  ready: boolean;
-  href?: string;
-}) {
-  return (
-    <div className="rounded-[24px] border border-[rgba(19,33,51,0.08)] bg-[rgba(255,255,255,0.72)] p-4">
-      <div className="flex items-center justify-between gap-3">
-        <p className="font-medium text-[var(--foreground)]">{label}</p>
-        <TonePill tone={ready ? "success" : "muted"}>{ready ? "可下载" : "待生成"}</TonePill>
-      </div>
-      <p className="mt-3 text-sm leading-6 text-[var(--ink-soft)]">{hint}</p>
-      <div className="mt-4">
-        {ready && href ? (
-          <ArtifactLink href={href} label="下载文件" />
-        ) : (
-          <MutedBlock text="冻结导出后会在这里提供下载。" />
-        )}
-      </div>
+    <div ref={menuRef} className="relative">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onToggle}
+        className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-full border border-[rgba(19,33,51,0.12)] bg-[rgba(255,255,255,0.88)] px-4 py-2.5 text-sm font-medium text-[var(--foreground)] transition hover:border-[rgba(240,133,52,0.38)] hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <span>{isExporting ? "导出中" : "导出"}</span>
+        <span className={`h-2.5 w-2.5 rotate-45 border-b-[1.5px] border-r-[1.5px] border-current transition ${open ? "translate-y-[-2px] rotate-[225deg]" : "translate-y-[-1px]"}`} />
+      </button>
+      {open ? (
+        <div className="absolute right-0 top-[calc(100%+12px)] z-20 w-[248px] rounded-[24px] border border-[rgba(19,33,51,0.1)] bg-[rgba(255,251,246,0.98)] p-2 shadow-[0_28px_48px_rgba(7,17,28,0.14)] backdrop-blur">
+          <button
+            type="button"
+            onClick={() => onExport("word")}
+            className="flex w-full items-center justify-between gap-4 rounded-[18px] px-4 py-3 text-left transition hover:bg-[rgba(240,133,52,0.08)]"
+          >
+            <span className="block text-sm font-medium text-[var(--foreground)]">导出 Word</span>
+            <span className="pt-1 text-[11px] uppercase tracking-[0.22em] text-[var(--ink-soft)]">.docx</span>
+          </button>
+          <div className="mx-3 border-t border-[rgba(19,33,51,0.08)]" />
+          <button
+            type="button"
+            onClick={() => onExport("ppt")}
+            className="mt-1 flex w-full items-center justify-between gap-4 rounded-[18px] px-4 py-3 text-left transition hover:bg-[rgba(240,133,52,0.08)]"
+          >
+            <span className="block text-sm font-medium text-[var(--foreground)]">导出 PPT</span>
+            <span className="pt-1 text-[11px] uppercase tracking-[0.22em] text-[var(--ink-soft)]">.pptx</span>
+          </button>
+        </div>
+      ) : null}
     </div>
   );
+}
+
+function ReportDocument({
+  markdown,
+  fallbackTitle,
+}: {
+  markdown: string;
+  fallbackTitle: string;
+}) {
+  const report = parseReportMarkdown(markdown);
+  const documentTitle = fallbackTitle || report.title.replace(/(?:》)?开题报告$/u, "").trim();
+
+  return (
+    <article className="relative overflow-hidden">
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-28 bg-[linear-gradient(180deg,rgba(240,133,52,0.1),transparent)]" />
+      <div className="relative mx-auto max-w-[980px] px-5 py-7 md:px-8 md:py-9 xl:px-12 xl:py-10">
+        <div className="border-b border-[rgba(19,33,51,0.08)] pb-6">
+          <h3 className="font-serif text-[1.95rem] leading-tight text-[var(--foreground)] md:text-[2.45rem]">
+            {documentTitle}
+          </h3>
+        </div>
+
+        <div className="mt-8 space-y-8">
+          {report.sections.map((section, index) => (
+            <section key={`${section.heading}-${index}`} className="grid gap-4 md:grid-cols-[68px_minmax(0,1fr)]">
+              <div className="pt-1 font-mono text-xs uppercase tracking-[0.26em] text-[var(--ink-soft)]">
+                {formatSectionIndex(index)}
+              </div>
+              <div className="space-y-4">
+                <h4 className="font-serif text-[1.5rem] leading-tight text-[var(--foreground)] md:text-[1.85rem]">
+                  {section.heading}
+                </h4>
+                <div className="space-y-4">
+                  {section.blocks.map((block, blockIndex) => (
+                    <ReportBlock key={`${section.heading}-${blockIndex}`} block={block} />
+                  ))}
+                </div>
+              </div>
+            </section>
+          ))}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function ReportBlock({ block }: { block: string }) {
+  const lines = block
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (!lines.length) return null;
+
+  if (lines.every((line) => /^-\s+/.test(line))) {
+    return (
+      <ul className="space-y-3">
+        {lines.map((line, index) => (
+          <li key={`${line}-${index}`} className="flex gap-3 text-[15px] leading-8 text-[var(--foreground-soft)] md:text-base">
+            <span className="mt-3 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--accent)]" />
+            <span>{line.replace(/^-\s+/, "")}</span>
+          </li>
+        ))}
+      </ul>
+    );
+  }
+
+  if (lines.every((line) => /^\d+\.\s+/.test(line))) {
+    return (
+      <ol className="space-y-3">
+        {lines.map((line, index) => {
+          const match = line.match(/^(\d+)\.\s+(.*)$/);
+          return (
+            <li
+              key={`${line}-${index}`}
+              className="grid grid-cols-[32px_minmax(0,1fr)] gap-3 text-[15px] leading-8 text-[var(--foreground-soft)] md:text-base"
+            >
+              <span className="font-mono text-[var(--accent)]">{match?.[1] || ""}.</span>
+              <span>{match?.[2] || line}</span>
+            </li>
+          );
+        })}
+      </ol>
+    );
+  }
+
+  return <p className="whitespace-pre-line text-[15px] leading-8 text-[var(--foreground-soft)] md:text-base">{block}</p>;
 }
 
 function MutedBlock({ text, padded = false }: { text: string; padded?: boolean }) {

@@ -1,0 +1,135 @@
+{
+  "id": "whu",
+  "name": "武汉大学",
+  "defaults": {
+    "school_name": "武汉大学",
+    "program_name": "专业硕士",
+    "thesis_type": "专题研究类"
+  },
+  "guide": {
+    "title": "武汉大学经济与管理学院专业硕士学位论文写作指南（2024年第二版）",
+    "issued_at": "2024-06",
+    "asset_pdf": "guides/whu-thesis-guide-2024-2.pdf",
+    "asset_text": "guides/whu-thesis-guide-2024-2.txt",
+    "summary": "选题必须面向真实企业或组织的具体管理问题，题目控制在 25 字以内，开题报告按学院登记表结构撰写。",
+    "selection_requirements": [
+      "选题必须来源于真实企业或组织的管理实践，优先结合本人所在单位或实践基地。",
+      "题目必须小而具体，避免过大、过空、过宽泛的管理题目。",
+      "题目应聚焦所属专业学位类别的研究范畴，避免跨到公共管理、教育管理等非工商管理领域。",
+      "题目需要具备一手资料获取条件，不能仅依赖二手网络资料或他人整理数据。",
+      "题目表述应简洁、准确得体，控制在 25 个字以内。",
+      "题目应避免过于学术化的“影响研究”“探析”“启示”“因素分析”等写法。"
+    ],
+    "proposal_requirements": [
+      "开题报告应包括选题背景与问题提出、相关研究动态、研究设计、进度安排和主要参考文献目录。",
+      "开题报告书面材料不少于 3000 字。",
+      "主要参考文献至少 30 篇，其中外文文献不少于三分之一。",
+      "文献应重点查阅近 5 年中文核心期刊和 SSCI/SCI 外文期刊。",
+      "开题答辩使用 PPT 陈述，陈述时间控制在 8 分钟以内。"
+    ],
+    "reference_requirements": {
+      "opening_report_min_items": 30,
+      "opening_report_foreign_ratio_min": 0.3333,
+      "thesis_reference_min_items": 40,
+      "thesis_core_ratio_min": 0.7,
+      "thesis_foreign_ratio_min": 0.3333,
+      "thesis_recent_ratio_min": 0.6
+    }
+  },
+  "required_sections": [
+    "基本信息",
+    "选题的背景与问题的提出",
+    "国内外关于该选题的动态",
+    "研究设计",
+    "研究方案及其进度安排",
+    "主要参考文献目录"
+  ],
+  "section_order": [
+    "基本信息",
+    "选题的背景与问题的提出",
+    "国内外关于该选题的动态",
+    "研究设计",
+    "研究方案及其进度安排",
+    "主要参考文献目录"
+  ],
+  "title_style_rules": {
+    "max_length": 25,
+    "preferred_suffixes": [
+      "优化研究",
+      "改进研究",
+      "机制研究",
+      "路径研究",
+      "体系构建研究"
+    ],
+    "forbidden_patterns": [
+      "影响研究",
+      "探析",
+      "启示",
+      "因素分析"
+    ]
+  },
+  "methodology_rules": {
+    "preferred_methods": [
+      "文献研究法",
+      "访谈法",
+      "问卷调查法",
+      "案例分析法",
+      "内部资料分析法"
+    ],
+    "required_data_statement": "应结合一手数据、访谈、问卷或企业内部资料，不能仅依赖二手网络资料。"
+  },
+  "citation_rules": {
+    "require_web_revalidation": true,
+    "require_absolute_dates_for_web_facts": true,
+    "min_citation_fields": [
+      "author",
+      "title",
+      "year",
+      "source"
+    ],
+    "opening_report_min_items": 30,
+    "opening_report_foreign_ratio_min": 0.3333
+  },
+  "deck_outline": [
+    {
+      "id": "cover",
+      "title": "封面",
+      "duration_seconds": 35
+    },
+    {
+      "id": "background",
+      "title": "选题背景",
+      "duration_seconds": 50
+    },
+    {
+      "id": "problem",
+      "title": "问题界定",
+      "duration_seconds": 50
+    },
+    {
+      "id": "questions",
+      "title": "研究目的",
+      "duration_seconds": 40
+    },
+    {
+      "id": "methods",
+      "title": "研究设计",
+      "duration_seconds": 60
+    },
+    {
+      "id": "sources",
+      "title": "文献与资料基础",
+      "duration_seconds": 45
+    },
+    {
+      "id": "outline",
+      "title": "论文结构与研究方案",
+      "duration_seconds": 55
+    },
+    {
+      "id": "timeline",
+      "title": "进度安排",
+      "duration_seconds": 45
+    }
+  ]
+}
